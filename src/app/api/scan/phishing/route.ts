@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 
-function generateEngineResults(phishingScore: number) {
-  const engines = [
-    "CyberDefender AI", "URL Validator", "Domain Analysis", "SSL Checker",
-    "Content Analyzer", "NLP Engine", "Header Inspector", " WHOIS Lookup",
-    "DNS Reputation", "ML Classifier", "Google Safe Browsing", "PhishTank API",
-    "Email Header Parser", "Link Scanner",
-  ];
+function generateEngineResults(phishingScore: number, mode: "url" | "email") {
+  const engines = mode === "url"
+    ? ["CyberDefender AI", "URL Validator", "Domain Analysis", "SSL Checker",
+       "Content Analyzer", "NLP Engine", "Header Inspector", "WHOIS Lookup",
+       "DNS Reputation", "ML Classifier", "Google Safe Browsing", "PhishTank API",
+       "Homograph Detector", "Link Scanner"]
+    : ["CyberDefender AI", "Email Header Parser", "Sender Analyzer", "NLP Engine",
+       "Content Analyzer", "Link Inspector", "Domain Validator", "WHOIS Lookup",
+       "DKIM/SPF Checker", "ML Classifier", "Social Engine Detector", "Urgency Analyzer",
+       "Grammar Checker", "Attachment Scanner"];
   return engines.map((name) => {
     const r = Math.random();
     const factor = phishingScore / 100;
@@ -22,7 +25,8 @@ function generateEngineResults(phishingScore: number) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { target } = await request.json();
+    const { target, mode } = await request.json();
+    const analysisMode: "url" | "email" = mode === "email" ? "email" : "url";
 
     if (!target || typeof target !== "string" || target.trim().length === 0) {
       return NextResponse.json(
@@ -32,60 +36,63 @@ export async function POST(request: NextRequest) {
     }
 
     const zai = await ZAI.create();
-    const isUrl = /^https?:\/\//i.test(target.trim());
-    const targetType = isUrl ? "URL" : "Email Content";
 
-    const systemPrompt = `You are CyberDefender, an elite AI-powered phishing detection engine specializing in identifying both known and zero-day phishing threats. You analyze URLs and email content using natural language processing, pattern recognition, and behavioral analysis.
+    const systemPrompt = analysisMode === "url"
+      ? `You are CyberDefender, an elite AI-powered phishing URL detection engine. You specialize in identifying both known and zero-day phishing URLs.
 
-IMPORTANT: Respond ONLY with valid JSON in this exact format (no markdown, no code blocks, just raw JSON):
+You perform comprehensive URL analysis including:
+- Domain reputation and age verification
+- URL structure analysis (subdomains, paths, parameters)
+- TLD risk assessment
+- SSL/TLS certificate validation
+- Homograph attack detection
+- URL encoding and obfuscation detection
+- Redirect chain analysis
+- Brand impersonation detection
+
+IMPORTANT: Respond ONLY with valid JSON (no markdown, no code blocks):
 {
   "score": <number 0-100 phishing probability>,
   "threatLevel": "<critical|high|medium|low|safe>",
-  "phishingType": "<string - type of phishing if detected>",
-  "details": "<string - detailed analysis in 3-5 professional sentences>",
-  "indicators": ["<string - phishing indicator 1>", "<string - phishing indicator 2>", ...],
-  "recommendations": ["<string - action 1>", "<string - action 2>", ...]
+  "phishingType": "<string - specific phishing type detected>",
+  "details": "<string - detailed URL analysis in 3-5 professional sentences focusing ONLY on URL-specific findings>",
+  "indicators": ["<URL-specific indicator 1>", "<URL-specific indicator 2>", ...],
+  "recommendations": ["<action 1>", "<action 2>", ...]
 }
 
-Scoring guidelines:
-- 0-19: SAFE - Legitimate, no phishing indicators
-- 20-39: LOW - Minor suspicious patterns
-- 40-59: MEDIUM - Multiple suspicious indicators
-- 60-79: HIGH - Likely phishing attempt
-- 80-100: CRITICAL - Confirmed phishing, high confidence
+Scoring: 0-19 SAFE, 20-39 LOW, 40-59 MEDIUM, 60-79 HIGH, 80-100 CRITICAL.
+Known legitimate domains (google.com, github.com, etc.) score 0-15.
+Known phishing patterns score 80-100.`
+      : `You are CyberDefender, an elite AI-powered phishing email detection engine. You specialize in identifying both known and zero-day phishing emails.
 
-For URL analysis, check:
-- Suspicious TLDs (.xyz, .tk, .ml, .ga, .cc, .ru for non-Russian sites)
-- Subdomain spoofing (paypal-login.evil.com)
-- URL encoding and obfuscation
-- Homograph attacks (using similar-looking characters)
-- Excessive subdomains
-- IP addresses instead of domain names
-- HTTP instead of HTTPS for login pages
-- Data URIs
-- URL shorteners pointing to suspicious destinations
-- Misspelled brand names (g00gle, paypa1, amaz0n)
-- Login-related keywords in suspicious contexts
-- Session tokens or tracking parameters
+You perform comprehensive email analysis including:
+- Sender address verification and spoofing detection
+- Social engineering pattern detection
+- Urgency and pressure tactic analysis
+- Link and URL inspection within the email
+- Grammar and spelling anomaly detection
+- Header analysis (From, Reply-To, Return-Path mismatch)
+- Personalization and greeting analysis
+- Call-to-action risk assessment
+- Attachment threat detection
 
-For email content analysis, check:
-- Urgency or fear tactics ("Your account will be suspended")
-- Requests for personal/financial information
-- Suspicious sender addresses
-- Generic greetings ("Dear Customer")
-- Poor grammar and spelling
-- Suspicious links
-- Mismatched display names and email addresses
-- Requests to bypass normal security procedures
-- Threatening language
-- Too-good-to-be-true offers
+IMPORTANT: Respond ONLY with valid JSON (no markdown, no code blocks):
+{
+  "score": <number 0-100 phishing probability>,
+  "threatLevel": "<critical|high|medium|low|safe>",
+  "phishingType": "<string - specific phishing type detected>",
+  "details": "<string - detailed email content analysis in 3-5 professional sentences focusing ONLY on email-specific findings>",
+  "indicators": ["<email-specific indicator 1>", "<email-specific indicator 2>", ...],
+  "recommendations": ["<action 1>", "<action 2>", ...]
+}
 
-Known legitimate domains should score very low (0-15).
-Known phishing patterns should score very high (80-100).`;
+Scoring: 0-19 SAFE, 20-39 LOW, 40-59 MEDIUM, 60-79 HIGH, 80-100 CRITICAL.
+Legitimate emails score 0-15.
+Phishing emails score 80-100.`;
 
-    const userMessage = isUrl
-      ? `Analyze this URL for phishing threats:\n\nURL: "${target}"\n\nPerform comprehensive phishing detection analysis including domain reputation, URL structure analysis, SSL verification simulation, and content pattern matching.`
-      : `Analyze this email content for phishing threats:\n\n---\n${target}\n---\n\nPerform comprehensive phishing detection analysis including sender verification, content analysis, link inspection, social engineering pattern detection, and urgency assessment.`;
+    const userMessage = analysisMode === "url"
+      ? `Analyze this URL for phishing threats:\n\nURL: "${target}"\n\nPerform comprehensive URL phishing detection analysis. Report ONLY URL-specific findings: domain reputation, URL structure, TLD risk, SSL status, homograph risks, suspicious patterns, etc.`
+      : `Analyze this email content for phishing threats:\n\n---\n${target}\n---\n\nPerform comprehensive email phishing detection analysis. Report ONLY email-specific findings: sender analysis, social engineering tactics, urgency language, grammar anomalies, suspicious links, header mismatches, etc.`;
 
     const completion = await zai.chat.completions.create({
       messages: [
@@ -102,47 +109,48 @@ Known phishing patterns should score very high (80-100).`;
       const jsonStr = rawResponse.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       analysis = JSON.parse(jsonStr);
     } catch {
-      // Fallback analysis with heuristic scoring
       let score = 10;
-      const suspiciousPatterns = [
-        /\.xyz|\.tk|\.ml|\.ga|\.cc|\.ru/i,
-        /login|secure|verify|account|update|confirm|suspend/i,
-        /free|gift|winner|claim|urgent|immediate/i,
-        /g00gle|paypa1|amaz0n|micros0ft|app1e/i,
-        /@\w+\.\w+\.\w+/,
-        /http:\/\//,
-      ];
-      suspiciousPatterns.forEach((pattern) => {
-        if (pattern.test(target)) score += 15;
-      });
-
+      if (analysisMode === "url") {
+        const urlPatterns = [/\.xyz|\.tk|\.ml|\.ga|\.cc|\.ru/i, /login|secure|verify|account|update|confirm|suspend/i,
+          /free|gift|winner|claim|urgent/i, /g00gle|paypa1|amaz0n|micros0ft/i, /http:\/\//];
+        urlPatterns.forEach((p) => { if (p.test(target)) score += 15; });
+      } else {
+        const emailPatterns = [/urgent|immediate|suspend|expire|action required/i, /click here|verify your|update your|confirm your/i,
+          /dear customer|dear user|dear member/i, /\$\d+|\d{4,}|\bfree\b|\bwinner\b|\bprize\b/i,
+          /http:\/\//i, /password|credential|ssn|social security/i];
+        emailPatterns.forEach((p) => { if (p.test(target)) score += 12; });
+      }
       score = Math.min(100, score);
-      const threatLevel = score >= 80 ? "critical" : score >= 60 ? "high" : score >= 40 ? "medium" : score >= 20 ? "low" : "safe";
-
+      const tl = score >= 80 ? "critical" : score >= 60 ? "high" : score >= 40 ? "medium" : score >= 20 ? "low" : "safe";
       analysis = {
-        score,
-        threatLevel,
+        score, threatLevel: tl,
         phishingType: score >= 60 ? "Credential Harvesting" : score >= 40 ? "Suspicious" : "None",
-        details: `Phishing analysis completed for ${targetType.toLowerCase()}: "${target.slice(0, 80)}...". Threat score: ${score}/100. ${score >= 60 ? "Multiple phishing indicators detected. High probability of social engineering attack." : score >= 40 ? "Some suspicious patterns found. Further investigation recommended." : "No significant phishing indicators detected."}`,
+        details: analysisMode === "url"
+          ? `URL analysis completed for "${target.slice(0, 100)}". Threat score: ${score}/100. ${score >= 60 ? "Multiple URL phishing indicators detected including suspicious domain structure or TLD." : score >= 40 ? "Some suspicious URL patterns found. Further investigation recommended." : "No significant URL phishing indicators detected. URL appears legitimate."}`
+          : `Email content analysis completed. Threat score: ${score}/100. ${score >= 60 ? "Multiple email phishing indicators detected including social engineering tactics and urgency language." : score >= 40 ? "Some suspicious email patterns found. Verify sender identity through official channels." : "No significant email phishing indicators detected. Content appears legitimate."}`,
         indicators: score >= 40
-          ? ["Suspicious domain pattern detected", "Social engineering indicators found", "Urgency language detected"]
+          ? (analysisMode === "url"
+            ? ["Suspicious domain structure", "High-risk TLD detected", "Potential brand impersonation in URL"]
+            : ["Social engineering tactics detected", "Urgency/pressure language found", "Suspicious sender patterns"])
           : [],
         recommendations: score >= 60
-          ? ["Do not interact with this content", "Report to security team", "Block the domain/sender"]
+          ? (analysisMode === "url"
+            ? ["Do not visit this URL", "Block the domain in firewall", "Report to phishing blacklist"]
+            : ["Do not click any links in the email", "Do not reply or provide any information", "Report as phishing to your email provider"])
           : score >= 40
-          ? ["Verify through official channels", "Do not enter credentials"]
-          : ["Content appears legitimate", "Continue with standard caution"],
+            ? (analysisMode === "url"
+              ? ["Verify through official channels", "Do not enter credentials on this URL"]
+              : ["Verify sender through official channels", "Do not download attachments"])
+            : ["Content appears legitimate", "Continue with standard caution"],
       };
     }
 
-    // Normalize
     const score = Math.max(0, Math.min(100, Number(analysis.score) || 0));
     const threatLevel = score >= 80 ? "critical" : score >= 60 ? "high" : score >= 40 ? "medium" : score >= 20 ? "low" : "safe";
-    const engines = generateEngineResults(score);
+    const engines = generateEngineResults(score, analysisMode);
 
     return NextResponse.json({
-      score,
-      threatLevel,
+      score, threatLevel, mode: analysisMode,
       phishingType: analysis.phishingType || "Unknown",
       details: analysis.details || `Phishing analysis completed. Score: ${score}/100.`,
       engines,
