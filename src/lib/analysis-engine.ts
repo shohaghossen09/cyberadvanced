@@ -185,7 +185,7 @@ function hexFromRNG(rng: () => number, len: number): string {
 }
 
 /** Generate a realistic-looking file hash */
-function generateHash(rng: () => number, bits: 32 | 40 | 64 | 128 | 256): string {
+function generateHash(rng: () => number, bits: 32 | 40 | 64 | 128 | 160 | 256): string {
   return hexFromRNG(rng, bits / 4);
 }
 
@@ -283,19 +283,19 @@ function pickItems<T>(rng: () => number, arr: T[], count: number): T[] {
 // ======================== ENGINE DEFINITIONS ===============================
 
 const MALWARE_ENGINES: { name: string; version: string; method: EngineMethod }[] = [
-  { name: "CyberDefender AI", version: "v3.0", method: "ml" },
+  { name: "CyberDefender AI", version: "v3.2", method: "ml" },
   { name: "Microsoft Defender", version: "v4.18.24050", method: "signature" },
-  { name: "ClamAV", version: "v1.3.1", method: "signature" },
+  { name: "ClamAV", version: "v1.4.0", method: "signature" },
   { name: "YARA Engine", version: "v4.5.0", method: "signature" },
-  { name: "Sigma Rules", version: "v2.2", method: "heuristic" },
+  { name: "Sigma Rules", version: "v2.3", method: "heuristic" },
   { name: "Snort IDS", version: "v3.1.41", method: "behavior" },
   { name: "Suricata", version: "v7.0.4", method: "behavior" },
   { name: "CrowdStrike Falcon", version: "v6.54", method: "ml" },
-  { name: "Kaspersky Engine", version: "2024.05", method: "signature" },
+  { name: "Kaspersky Engine", version: "2024.06", method: "signature" },
   { name: "BitDefender", version: "v7.9", method: "heuristic" },
   { name: "McAfee", version: "v6.0.6342", method: "signature" },
   { name: "Sophos", version: "v4.98", method: "ml" },
-  { name: "Avast Engine", version: "v24.04", method: "heuristic" },
+  { name: "Avast Engine", version: "v24.05", method: "heuristic" },
   { name: "ESET NOD32", version: "v22165", method: "signature" },
   { name: "Norton LifeLock", version: "v6.3", method: "heuristic" },
   { name: "Trend Micro", version: "v17.0", method: "ml" },
@@ -303,47 +303,86 @@ const MALWARE_ENGINES: { name: string; version: string; method: EngineMethod }[]
   { name: "Cisco AMP", version: "v8.4", method: "sandbox" },
   { name: "FireEye NX", version: "v9.2", method: "sandbox" },
   { name: "Palo Alto Unit42", version: "v11.1", method: "behavior" },
+  { name: "AhnLab V3", version: "v3.24.0", method: "signature" },
+  { name: "Avira Engine", version: "v15.0.24", method: "heuristic" },
+  { name: "Baidu Antivirus", version: "v5.6", method: "ml" },
+  { name: "Comodo Cleaning", version: "v12.2.0", method: "sandbox" },
+  { name: "Cylance PROTECT", version: "v3.0", method: "ml" },
+  { name: "Dr.Web", version: "v13.0", method: "signature" },
+  { name: "F-Secure SAFE", version: "v18.0", method: "ml" },
+  { name: "G Data TotalCare", version: "v28.2", method: "signature" },
+  { name: "Ikarus T3", version: "v2.8", method: "heuristic" },
+  { name: "Jiangmin Antivirus", version: "v16.0", method: "signature" },
+  { name: "MAX Antivirus", version: "v2024.05", method: "heuristic" },
+  { name: "VIPRE Antivirus", version: "v6.2", method: "signature" },
+  { name: "ZoneAlarm", version: "v6.5", method: "behavior" },
+  { name: "TotalAV", version: "v5.4", method: "heuristic" },
+  { name: "Ad-Aware", version: "v12.0", method: "signature" },
+  { name: "Zoner Antivirus", version: "v21.0", method: "ml" },
+  { name: "CTX Engine", version: "v3.1", method: "behavior" },
+  { name: "SentinelOne", version: "v24.2", method: "ml" },
+  { name: "VMRay", version: "v4.5", method: "sandbox" },
+  { name: "JoeSandbox", version: "v3.8", method: "sandbox" },
+  { name: "Cuckoo Sandbox", version: "v2.6", method: "sandbox" },
+  { name: "ANY.RUN", version: "v5.0", method: "sandbox" },
+  { name: "Hybrid Analysis", version: "v7.0", method: "behavior" },
 ];
 
 const PHISHING_URL_ENGINES: { name: string; version: string; method: EngineMethod }[] = [
-  { name: "CyberDefender AI", version: "v3.0", method: "ml" },
-  { name: "Google Safe Browsing", version: "v4.2", method: "signature" },
-  { name: "PhishTank API", version: "v2.0", method: "signature" },
-  { name: "URLhaus", version: "v1.3", method: "signature" },
+  { name: "CyberDefender AI", version: "v3.2", method: "ml" },
+  { name: "Google Safe Browsing", version: "v4.3", method: "signature" },
+  { name: "PhishTank API", version: "v2.1", method: "signature" },
+  { name: "URLhaus", version: "v1.4", method: "signature" },
   { name: "Microsoft Defender SmartScreen", version: "v4.18", method: "heuristic" },
-  { name: "Norton Safe Web", version: "v3.2", method: "heuristic" },
+  { name: "Norton Safe Web", version: "v3.3", method: "heuristic" },
   { name: "McAfee SiteAdvisor", version: "v4.5", method: "ml" },
-  { name: "Web of Trust", version: "v2.8", method: "ml" },
-  { name: "Spamhaus ZEN", version: "v3.1", method: "signature" },
-  { name: "OpenPhish", version: "v1.5", method: "ml" },
-  { name: "Phishing.Database", version: "v2024.05", method: "signature" },
-  { name: "VirusTotal URL", version: "v2.1", method: "heuristic" },
-  { name: "ESET URL Advisor", version: "v4.0", method: "heuristic" },
-  { name: "BitDefender TrafficLight", version: "v3.7", method: "heuristic" },
-  { name: "FortiGuard Web Filter", version: "v5.4", method: "signature" },
-  { name: "Sucuri SiteCheck", version: "v2.3", method: "sandbox" },
+  { name: "Web of Trust", version: "v2.9", method: "ml" },
+  { name: "Spamhaus ZEN", version: "v3.2", method: "signature" },
+  { name: "OpenPhish", version: "v1.6", method: "ml" },
+  { name: "Phishing.Database", version: "v2024.06", method: "signature" },
+  { name: "VirusTotal URL", version: "v2.2", method: "heuristic" },
+  { name: "ESET URL Advisor", version: "v4.1", method: "heuristic" },
+  { name: "BitDefender TrafficLight", version: "v3.8", method: "heuristic" },
+  { name: "FortiGuard Web Filter", version: "v5.5", method: "signature" },
+  { name: "Sucuri SiteCheck", version: "v2.4", method: "sandbox" },
+  { name: "Cisco Umbrella", version: "v3.1", method: "signature" },
+  { name: "Yandex Safe Browsing", version: "v2.8", method: "heuristic" },
+  { name: "Trend Micro Site Safety", version: "v5.2", method: "ml" },
+  { name: "Kaspersky URL Advisor", version: "v4.0", method: "heuristic" },
+  { name: "Avast Online Security", version: "v3.6", method: "ml" },
+  { name: "Sophos Web Appliance", version: "v4.4", method: "behavior" },
+  { name: "Barracuda Web Filter", version: "v6.1", method: "heuristic" },
+  { name: "Proofpoint URL Defense", version: "v7.8", method: "ml" },
+  { name: "Mimecast URL Protect", version: "v4.2", method: "heuristic" },
+  { name: "zScalar Web Security", version: "v3.0", method: "behavior" },
 ];
 
 const PHISHING_EMAIL_ENGINES: { name: string; version: string; method: EngineMethod }[] = [
-  { name: "CyberDefender AI", version: "v3.0", method: "ml" },
-  { name: "Email Header Parser", version: "v2.1", method: "heuristic" },
-  { name: "Sender Analyzer", version: "v1.8", method: "heuristic" },
-  { name: "NLP Engine", version: "v3.2", method: "ml" },
-  { name: "Content Analyzer", version: "v2.5", method: "ml" },
-  { name: "Link Inspector", version: "v2.0", method: "heuristic" },
-  { name: "Domain Validator", version: "v1.9", method: "heuristic" },
-  { name: "DKIM/SPF Checker", version: "v2.3", method: "signature" },
-  { name: "ML Classifier", version: "v3.0", method: "ml" },
-  { name: "Social Engineering Detector", version: "v1.5", method: "behavior" },
-  { name: "Urgency Analyzer", version: "v2.1", method: "ml" },
-  { name: "Grammar Checker", version: "v1.7", method: "heuristic" },
-  { name: "Attachment Scanner", version: "v2.4", method: "signature" },
-  { name: "OAuth Token Detector", version: "v1.3", method: "behavior" },
+  { name: "CyberDefender AI", version: "v3.2", method: "ml" },
+  { name: "Email Header Parser", version: "v2.2", method: "heuristic" },
+  { name: "Sender Analyzer", version: "v1.9", method: "heuristic" },
+  { name: "NLP Engine", version: "v3.3", method: "ml" },
+  { name: "Content Analyzer", version: "v2.6", method: "ml" },
+  { name: "Link Inspector", version: "v2.1", method: "heuristic" },
+  { name: "Domain Validator", version: "v2.0", method: "heuristic" },
+  { name: "DKIM/SPF Checker", version: "v2.4", method: "signature" },
+  { name: "ML Classifier", version: "v3.1", method: "ml" },
+  { name: "Social Engineering Detector", version: "v1.6", method: "behavior" },
+  { name: "Urgency Analyzer", version: "v2.2", method: "ml" },
+  { name: "Grammar Checker", version: "v1.8", method: "heuristic" },
+  { name: "Attachment Scanner", version: "v2.5", method: "signature" },
+  { name: "OAuth Token Detector", version: "v1.4", method: "behavior" },
+  { name: "DMARC Analyzer", version: "v2.0", method: "signature" },
+  { name: "Reply-To Validator", version: "v1.5", method: "heuristic" },
+  { name: "Sender Score Engine", version: "v3.0", method: "ml" },
+  { name: "Header Chain Inspector", version: "v2.1", method: "behavior" },
+  { name: "Payload Scanner", version: "v2.3", method: "sandbox" },
+  { name: "BEC Detector", version: "v1.8", method: "ml" },
 ];
 
 // ======================== DETECTION NAME DATABASES =========================
 
-const MALWARE_TYPES: Record<number, string[]> = {
+const MALWARE_TYPES: Record<string, string[]> = {
   high: [
     "Trojan.GenericKD.48525312", "Trojan.Win32.Agent.xwz", "W32.Blaster.Worm",
     "Trojan.Dropper.BCMiner", "Backdoor.Win32.DarkComet", "Trojan.Win64.Crypt.abc",
@@ -365,7 +404,7 @@ const MALWARE_TYPES: Record<number, string[]> = {
   ],
 };
 
-const MALWARE_FAMILIES: Record<number, string[]> = {
+const MALWARE_FAMILIES: Record<string, string[]> = {
   high: [
     "Emotet", "TrickBot", "Qakbot", "Cobalt Strike", "Ryuk", "Conti",
     "LockBit", "BlackBasta", "ALPHV/BlackCat", "Cl0p", "Volt Typhoon",
@@ -381,7 +420,7 @@ const MALWARE_FAMILIES: Record<number, string[]> = {
   ],
 };
 
-const PHISHING_TYPES_URL: Record<number, string[]> = {
+const PHISHING_TYPES_URL: Record<string, string[]> = {
   high: [
     "Brand Impersonation", "Credential Harvesting", "Phishing Landing Page",
     "Typosquatting Domain", "Homograph Attack", "Compromised Website",
@@ -396,7 +435,7 @@ const PHISHING_TYPES_URL: Record<number, string[]> = {
   ],
 };
 
-const PHISHING_TYPES_EMAIL: Record<number, string[]> = {
+const PHISHING_TYPES_EMAIL: Record<string, string[]> = {
   high: [
     "Credential Harvesting", "Business Email Compromise (BEC)", "CEO Fraud",
     "Spear Phishing", "Social Engineering Attack", "Account Takeover Attempt",

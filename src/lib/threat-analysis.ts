@@ -1357,18 +1357,18 @@ export async function lookupThreatIntel(
       }
     }
 
-    const result = await zai.functions.invoke("web_search", {
+    const result: unknown[] = await zai.functions.invoke("web_search", {
       query,
       num: 5,
     });
 
-    const data = result.data;
-    if (!data || !Array.isArray(data.results) || data.results.length === 0) {
+    const data = result;
+    if (!data || !Array.isArray(data) || data.length === 0) {
       return { found: false, sources: [], threatReports: 0 };
     }
 
-    const sources = data.results.slice(0, 5).map((r: Record<string, string>) => ({
-      title: r.title || "Unknown",
+    const sources = (data as Record<string, string>[]).slice(0, 5).map((r) => ({
+      title: r.title || r.name || "Unknown",
       snippet: r.snippet || r.description || "",
       url: r.url || r.link || "",
     }));
@@ -1376,7 +1376,7 @@ export async function lookupThreatIntel(
     return {
       found: true,
       sources,
-      threatReports: data.results.length,
+      threatReports: data.length,
     };
   } catch {
     // Silently fallback — AI SDK config not available in all environments

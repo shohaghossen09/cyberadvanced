@@ -57,6 +57,7 @@ interface ScanResult {
   sslData?: Record<string, unknown>;
   whoisData?: Record<string, unknown>;
   dnsData?: Record<string, unknown>;
+  webIntel?: { query: string; snippets: string[]; sources: { title: string; url: string }[] };
 }
 
 interface EngineResult {
@@ -596,6 +597,31 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                     </div>
                   </div>
                 )}
+
+                {/* Real-time Web Intel Sources */}
+                {result.webIntel && result.webIntel.sources.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-cyber-border">
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <Globe className="h-3 w-3 text-cyber-cyan" /> REAL-TIME THREAT INTELLIGENCE
+                    </h4>
+                    <div className="space-y-1.5">
+                      {result.webIntel.sources.map((src, i) => (
+                        <div key={i} className="flex items-center gap-2 p-2 rounded bg-cyber-dark/50 border border-cyber-border/50 text-[10px]">
+                          <Link2 className="h-3 w-3 text-cyber-cyan shrink-0" />
+                          <span className="text-slate-300 truncate flex-1">{src.title}</span>
+                          <Badge variant="outline" className="text-[8px] border-cyber-cyan/30 text-cyber-cyan/70 shrink-0">LIVE</Badge>
+                        </div>
+                      ))}
+                    </div>
+                    {result.webIntel.snippets.length > 0 && (
+                      <div className="mt-2 p-2 rounded bg-slate-800/20 border border-cyber-border/30 text-[10px] text-slate-500 leading-relaxed max-h-24 overflow-y-auto cyber-scrollbar">
+                        {result.webIntel.snippets.map((s, i) => (
+                          <div key={i} className="mb-1 last:mb-0">• {s}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </TabsContent>
 
@@ -756,18 +782,18 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                             {metaRow("Expires", whois.expirationDate)}
                             {metaRow("Registrant Org", whois.registrantOrg)}
                             {metaRow("Registrant Country", whois.registrantCountry)}
-                            {whois.nameServers && Array.isArray(whois.nameServers) && whois.nameServers.length > 0 && (
+                            {whois.nameServers && Array.isArray(whois.nameServers) && whois.nameServers.length > 0 ? (
                               <div className="flex items-start gap-2 py-1.5">
                                 <span className="text-[10px] text-slate-500 tracking-wider uppercase w-28 shrink-0 pt-px">NS</span>
                                 <div className="flex flex-wrap gap-1">
-                                  {whois.nameServers.map((ns: unknown, i: number) => (
+                                  {(whois.nameServers as unknown[]).map((ns, i) => (
                                     <Badge key={i} variant="outline" className="text-[9px] font-mono border-slate-600/50 text-slate-400">
                                       {String(ns)}
                                     </Badge>
                                   ))}
                                 </div>
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         </div>
                       )}
@@ -1027,7 +1053,7 @@ function MalwareScanner({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">MALWARE ANALYSIS ENGINE</h2>
-              <p className="text-[11px] text-slate-500">AI-powered multi-engine threat detection — 14 engines, real-time analysis</p>
+              <p className="text-[11px] text-slate-500">AI-powered multi-engine threat detection — 44 engines, real-time web intelligence</p>
             </div>
           </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
@@ -1204,7 +1230,7 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">AI PHISHING DETECTION ENGINE</h2>
-              <p className="text-[11px] text-slate-500">Known & zero-day phishing detection — URL structure + Email content analysis</p>
+              <p className="text-[11px] text-slate-500">Known & zero-day phishing detection — 26 URL engines + 20 Email engines, real-time intel</p>
             </div>
           </div>
 

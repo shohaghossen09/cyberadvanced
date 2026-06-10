@@ -1,13 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyzePhishing } from "@/lib/analysis-engine";
 
-const AI_TIMEOUT = 8000;
+const AI_TIMEOUT = 10000;
+const SEARCH_TIMEOUT = 12000;
+
+interface WebIntelData {
+  query: string;
+  snippets: string[];
+  sources: { title: string; url: string }[];
+}
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   return Promise.race([
     promise,
     new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
   ]);
+}
+
+async function tryGetZAI() {
+  try {
+    const ZAI = (await import("z-ai-web-dev-sdk")).default;
+    const zai = await withTimeout(ZAI.create(), AI_TIMEOUT);
+    return zai || null;
+  } catch {
+    return null;
+  }
+}
+
+async function searchWebIntel(
+  zai: Awaited<ReturnType<typeof tryGetZAI>>,
+  query: string,
+): Promise<WebIntelData | null> {
+  if (!zai) return null;
+  try {
+    const results = await withTimeout(
+      zai.functions.invoke("web_search", { query, num: 5 }),
+      SEARCH_TIMEOUT
+    );
+    if (results && Array.isArray(results) && results.length > 0) {
+      return {
+        query,
+        snippets: results.slice(0, 3).map((r: { snippet?: string }) => r.snippet || "").filter(Boolean),
+        sources: results.slice(0, 3).map((r: { name?: string; url?: string }) => ({
+          title: r.name || "",
+          url: r.url || "",
+        })),
+      };
+    }
+  } catch {
+    // Web search unavailable
+  }
+  return null;
+}
+
+async function getAIAnalysis(
+  zai: Awaited<ReturnType<typeof tryGetZAI>>,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  if (!zai) return "";
+  try {
+    const completion = await withTimeout(
+      zai.chat.completions.create({
+        messages: [
+          { role: "assistant", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        thinking: { type: "disabled" },
+      }),
+      AI_TIMEOUT
+    );
+    return completion?.choices?.[0]?.message?.content || "";
+  } catch {
+    return "";
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -18,42 +84,76 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Target is required" }, { status: 400 });
     }
 
-    // Try AI enhancement, but always work with heuristic base
-    let aiEnhanced = false;
-    let aiDetails = "";
-    try {
-      const ZAI = (await import("z-ai-web-dev-sdk")).default;
-      const zai = await withTimeout(ZAI.create(), AI_TIMEOUT);
-      if (zai) {
-        const completion = await withTimeout(
-          zai.chat.completions.create({
-            messages: [
-              {
-                role: "assistant",
-                content: `You are a cybersecurity AI phishing detection expert. Provide ONLY a brief (2-3 sentence) additional analysis. ${analysisMode === "url" ? "Focus on URL structure, domain reputation, and brand impersonation." : "Focus on social engineering tactics, sender spoofing, and urgency language."}`,
-              },
-              { role: "user", content: `Analyze for phishing: ${analysisMode === "url" ? target.slice(0, 500) : target.slice(0, 1000)}` },
-            ],
-            thinking: { type: "disabled" },
-          }),
-          AI_TIMEOUT
-        );
-        if (completion) {
-          aiDetails = completion.choices[0]?.message?.content || "";
-          if (aiDetails) aiEnhanced = true;
-        }
+    // 1. Always run heuristic analysis first (fast, deterministic)
+    const baseResult = analyzePhishing(target, analysisMode);
+
+    // 2. Get ZAI instance
+    const zai = await tryGetZAI();
+
+    // 3. Build search query from target
+    let domain = "";
+    if (analysisMode === "url") {
+      try {
+        const u = new URL(target.startsWith("http") ? target : `https://${target}`);
+        domain = u.hostname;
+      } catch {
+        domain = target.split("/")[0];
       }
-    } catch {
-      // AI unavailable, use pure heuristic
+    }
+    const searchQuery =
+      analysisMode === "url"
+        ? `phishing scam threat "${domain}" site report analysis`
+        : `email phishing scam "${target.slice(0, 50)}" threat report`;
+
+    // 4. Parallel: AI analysis + Web search
+    const [aiDetails, webIntel] = await Promise.all([
+      getAIAnalysis(
+        zai,
+        `You are a senior cybersecurity analyst specializing in ${analysisMode === "url" ? "URL-based" : "email-based"} phishing detection. Provide a detailed (4-6 sentence) threat analysis. Include specific phishing techniques identified, brand impersonation targets, social engineering tactics, and recommended countermeasures.`,
+        `Analyze this for phishing threats:\n\nTarget: ${analysisMode === "url" ? `"${target.slice(0, 500)}"` : `Email content:\n"${target.slice(0, 1000)}"`}\nAnalysis Mode: ${analysisMode}\nThreat Score: ${baseResult.score}/100\nPhishing Type: ${baseResult.phishingType}\nDetection Rate: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length} engines`
+      ),
+      searchWebIntel(zai, searchQuery),
+    ]);
+
+    // 5. If we have both AI and web intel, synthesize them
+    let enrichedAnalysis = aiDetails || baseResult.details;
+    if (webIntel && webIntel.snippets.length > 0 && zai) {
+      const intelContext = webIntel.snippets.join("\n");
+      const sourceList = webIntel.sources.map((s) => `• ${s.title} (${s.url})`).join("\n");
+      const synthesized = await getAIAnalysis(
+        zai,
+        "You are a threat intelligence analyst specializing in phishing threats. Synthesize heuristic scan results with real-time web intelligence into a comprehensive phishing threat report (3-5 sentences).",
+        `TARGET: ${analysisMode === "url" ? `"${target.slice(0, 200)}"` : `Email (first 200 chars): "${target.slice(0, 200)}"`}\n\nHEURISTIC RESULTS:\n- Threat Score: ${baseResult.score}/100\n- Phishing Type: ${baseResult.phishingType}\n- Detections: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length}\n\nREAL-TIME WEB INTELLIGENCE:\n${intelContext}\n\nSOURCES:\n${sourceList}`
+      );
+      if (synthesized) enrichedAnalysis = synthesized;
     }
 
-    const result = analyzePhishing(target, analysisMode);
+    const aiEnhanced = !!(aiDetails || webIntel);
+
+    // 6. Enrich community data with web sources
+    const enrichedCommunity = { ...baseResult.community };
+    if (webIntel && webIntel.sources.length > 0) {
+      const existingComments = [...baseResult.community.comments];
+      for (const src of webIntel.sources) {
+        if (src.title && !existingComments.some((c) => c.text.includes(src.title))) {
+          existingComments.push({
+            date: new Date().toISOString().slice(0, 10),
+            user: "Threat Intel Feed",
+            text: `Related threat report: ${src.title}`,
+            verdict: baseResult.score >= 40 ? "malicious" : "harmless",
+          });
+        }
+      }
+      enrichedCommunity.comments = existingComments.slice(0, 8);
+    }
 
     return NextResponse.json({
-      ...result,
+      ...baseResult,
       mode: analysisMode,
       aiEnhanced,
-      aiAnalysis: aiDetails || result.details,
+      aiAnalysis: enrichedAnalysis,
+      community: enrichedCommunity,
+      webIntel,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
