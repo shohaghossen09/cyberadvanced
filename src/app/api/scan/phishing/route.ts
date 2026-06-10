@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyzePhishing } from "@/lib/analysis-engine";
+import { runMLEnsemble } from "@/lib/ml-engine";
 
 const AI_TIMEOUT = 10000;
 const SEARCH_TIMEOUT = 12000;
@@ -84,8 +85,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Target is required" }, { status: 400 });
     }
 
-    // 1. Always run heuristic analysis first (fast, deterministic)
-    const baseResult = analyzePhishing(target, analysisMode);
+    // 1. Run heuristic analysis AND ML analysis in parallel
+    const mlDomain = analysisMode === "email" ? "phishing_email" as const : "phishing_url" as const;
+    const [baseResult, mlResult] = await Promise.all([
+      Promise.resolve(analyzePhishing(target, analysisMode)),
+      Promise.resolve(runMLEnsemble(target, mlDomain)),
+    ]);
 
     // 2. Get ZAI instance
     const zai = await tryGetZAI();
@@ -105,12 +110,12 @@ export async function POST(request: NextRequest) {
         ? `phishing scam threat "${domain}" site report analysis`
         : `email phishing scam "${target.slice(0, 50)}" threat report`;
 
-    // 4. Parallel: AI analysis + Web search
+    // 4. Parallel: AI analysis + Web search (include ML results in prompt)
     const [aiDetails, webIntel] = await Promise.all([
       getAIAnalysis(
         zai,
         `You are a senior cybersecurity analyst specializing in ${analysisMode === "url" ? "URL-based" : "email-based"} phishing detection. Provide a detailed (4-6 sentence) threat analysis. Include specific phishing techniques identified, brand impersonation targets, social engineering tactics, and recommended countermeasures.`,
-        `Analyze this for phishing threats:\n\nTarget: ${analysisMode === "url" ? `"${target.slice(0, 500)}"` : `Email content:\n"${target.slice(0, 1000)}"`}\nAnalysis Mode: ${analysisMode}\nThreat Score: ${baseResult.score}/100\nPhishing Type: ${baseResult.phishingType}\nDetection Rate: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length} engines`
+        `Analyze this for phishing threats:\n\nTarget: ${analysisMode === "url" ? `"${target.slice(0, 500)}"` : `Email content:\n"${target.slice(0, 1000)}"`}\nAnalysis Mode: ${analysisMode}\nThreat Score: ${baseResult.score}/100\nPhishing Type: ${baseResult.phishingType}\nDetection Rate: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length} engines\n\nML/DL ENSEMBLE RESULTS:\n- ML Score: ${mlResult.ensembleScore}/100\n- ML Prediction: ${mlResult.ensemblePrediction}\n- ML Confidence: ${(mlResult.ensembleConfidence * 100).toFixed(1)}%\n- Models: ${mlResult.models.map(m => `${m.name}(${m.prediction}:${(m.confidence * 100).toFixed(0)}%)`).join(", ")}\n- Top Features: ${mlResult.featureImportance.slice(0, 5).map(f => `${f.feature}(${(f.importance * 100).toFixed(0)}%)`).join(", ")}\n- Processing Time: ${mlResult.processingTimeMs}ms`
       ),
       searchWebIntel(zai, searchQuery),
     ]);
@@ -122,13 +127,13 @@ export async function POST(request: NextRequest) {
       const sourceList = webIntel.sources.map((s) => `• ${s.title} (${s.url})`).join("\n");
       const synthesized = await getAIAnalysis(
         zai,
-        "You are a threat intelligence analyst specializing in phishing threats. Synthesize heuristic scan results with real-time web intelligence into a comprehensive phishing threat report (3-5 sentences).",
-        `TARGET: ${analysisMode === "url" ? `"${target.slice(0, 200)}"` : `Email (first 200 chars): "${target.slice(0, 200)}"`}\n\nHEURISTIC RESULTS:\n- Threat Score: ${baseResult.score}/100\n- Phishing Type: ${baseResult.phishingType}\n- Detections: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length}\n\nREAL-TIME WEB INTELLIGENCE:\n${intelContext}\n\nSOURCES:\n${sourceList}`
+        "You are a threat intelligence analyst specializing in phishing threats. Synthesize heuristic scan results with real-time web intelligence and ML model analysis into a comprehensive phishing threat report (3-5 sentences).",
+        `TARGET: ${analysisMode === "url" ? `"${target.slice(0, 200)}"` : `Email (first 200 chars): "${target.slice(0, 200)}"`}\n\nHEURISTIC RESULTS:\n- Threat Score: ${baseResult.score}/100\n- Phishing Type: ${baseResult.phishingType}\n- Detections: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length}\n\nML/DL ENSEMBLE:\n- Prediction: ${mlResult.ensemblePrediction} (${(mlResult.ensembleConfidence * 100).toFixed(1)}%)\n- 7 Models: ${mlResult.models.map(m => m.name).join(", ")}\n\nREAL-TIME WEB INTELLIGENCE:\n${intelContext}\n\nSOURCES:\n${sourceList}`
       );
       if (synthesized) enrichedAnalysis = synthesized;
     }
 
-    const aiEnhanced = !!(aiDetails || webIntel);
+    const aiEnhanced = !!(aiDetails || webIntel || mlResult);
 
     // 6. Enrich community data with web sources
     const enrichedCommunity = { ...baseResult.community };
@@ -154,6 +159,7 @@ export async function POST(request: NextRequest) {
       aiAnalysis: enrichedAnalysis,
       community: enrichedCommunity,
       webIntel,
+      mlAnalysis: mlResult,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

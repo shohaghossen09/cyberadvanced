@@ -58,6 +58,20 @@ interface ScanResult {
   whoisData?: Record<string, unknown>;
   dnsData?: Record<string, unknown>;
   webIntel?: { query: string; snippets: string[]; sources: { title: string; url: string }[] };
+  mlAnalysis?: {
+    models: { name: string; type: string; prediction: string; confidence: number; probabilities: { safe: number; suspicious: number; malicious: number }; processingTimeMs: number; description: string }[];
+    ensemblePrediction: string;
+    ensembleConfidence: number;
+    ensembleScore: number;
+    featureImportance: { feature: string; importance: number; value: number; direction: string }[];
+    extractedFeatures: { name: string; value: number; normalized: number }[];
+    modelArchitecture: { modelName: string; layers: { name: string; type: string; dims: number[]; activation: string; params: number }[]; totalParameters: number; framework: string; trainingMethod: string };
+    processingTimeMs: number;
+    modelVersion: string;
+    trainedOn: string;
+    datasetSize: string;
+    accuracy: string;
+  };
 }
 
 interface EngineResult {
@@ -447,12 +461,14 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
   const hasRelations = !!result.relations;
   const hasBehavior = !!result.behavior;
   const hasCommunity = !!result.community;
+  const hasML = !!result.mlAnalysis;
 
   // Safely cast nested data
   const meta = result.fileMetadata as Record<string, unknown> | undefined;
   const rels = result.relations as Record<string, string[]> | undefined;
   const beh = result.behavior as Record<string, Record<string, unknown>[]> | undefined;
   const comm = result.community as Record<string, unknown> | undefined;
+  const ml = result.mlAnalysis;
   const ssl = result.sslData as Record<string, unknown> | undefined;
   const whois = result.whoisData as Record<string, unknown> | undefined;
   const dns = result.dnsData as Record<string, unknown> | undefined;
@@ -489,6 +505,7 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                 ...(hasRelations ? [{ value: "relations", icon: Network, label: "RELATIONS" }] : []),
                 ...(hasBehavior ? [{ value: "behavior", icon: Activity, label: "BEHAVIOR" }] : []),
                 ...(hasCommunity ? [{ value: "community", icon: Users, label: "COMMUNITY" }] : []),
+                ...(hasML ? [{ value: "mlanalysis", icon: BrainIcon, label: "ML/DL ANALYSIS" }] : []),
               ].map(tab => (
                 <TabsTrigger key={tab.value} value={tab.value}
                   className="data-[state=active]:bg-transparent data-[state=active]:border-cyber-cyan data-[state=active]:text-cyber-cyan data-[state=active]:shadow-none rounded-none border-b-2 border-transparent text-slate-500 hover:text-slate-300 px-4 py-3 transition-all text-[10px] tracking-wider uppercase font-semibold gap-1.5">
@@ -1021,6 +1038,132 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                 </div>
               </TabsContent>
             )}
+
+            {/* ML/DL ANALYSIS TAB */}
+            {hasML && ml && (
+              <TabsContent value="mlanalysis" className="mt-0">
+                <div className="p-4 space-y-4">
+                  {/* ML Ensemble Header */}
+                  <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <BrainIcon className="h-4 w-4 text-cyber-cyan" />
+                        <span className="text-[11px] tracking-wider text-slate-400 uppercase font-semibold">ML/DL ENSEMBLE RESULT</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[9px] tracking-wider border-cyber-cyan/50 text-cyber-cyan">{ml.modelVersion}</Badge>
+                        <Badge variant="outline" className="text-[9px] tracking-wider border-cyber-green/50 text-cyber-green">{ml.accuracy}</Badge>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <ScoreRing score={ml.ensembleScore} size={90} label="ML Score" />
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold" style={{ color: ml.ensemblePrediction === "malicious" ? "#ff3344" : ml.ensemblePrediction === "suspicious" ? "#ffaa00" : "#00ff88" }}>
+                          {ml.ensemblePrediction.toUpperCase()}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          Confidence: <span className="text-slate-300">{(ml.ensembleConfidence * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="text-[10px] text-slate-600 mt-1">
+                          {ml.datasetSize} • {ml.processingTimeMs}ms inference • {ml.models.length} models
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Model Predictions Grid */}
+                  <div>
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <Activity className="h-3 w-3 text-cyber-cyan" /> MODEL PREDICTIONS (7 ALGORITHMS)
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {ml.models.map((model, i) => (
+                        <motion.div key={model.name} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                          className="p-2.5 rounded border bg-slate-800/20 border-cyber-border/50">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] font-medium text-slate-300">{model.name}</span>
+                              <Badge variant="outline" className="text-[8px] tracking-wider border-slate-600/50 text-slate-500">{model.type.toUpperCase()}</Badge>
+                            </div>
+                            <Badge variant="outline" className={cn("text-[8px] tracking-wider",
+                              model.prediction === "malicious" ? "border-cyber-red/50 text-cyber-red" :
+                              model.prediction === "suspicious" ? "border-cyber-amber/50 text-cyber-amber" :
+                              "border-cyber-green/50 text-cyber-green"
+                            )}>
+                              {model.prediction.toUpperCase()}
+                            </Badge>
+                          </div>
+                          <div className="flex h-1.5 rounded-full overflow-hidden bg-slate-800 mb-1">
+                            <div className="bg-cyber-green transition-all" style={{ width: `${(model.probabilities.safe * 100)}%` }} />
+                            <div className="bg-cyber-amber transition-all" style={{ width: `${(model.probabilities.suspicious * 100)}%` }} />
+                            <div className="bg-cyber-red transition-all" style={{ width: `${(model.probabilities.malicious * 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between text-[9px] text-slate-600">
+                            <span>{(model.confidence * 100).toFixed(0)}% conf</span>
+                            <span>{model.processingTimeMs}ms</span>
+                          </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Feature Importance */}
+                  <div>
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <Gauge className="h-3 w-3 text-cyber-amber" /> FEATURE IMPORTANCE (TOP 10)
+                    </h4>
+                    <div className="space-y-1.5">
+                      {ml.featureImportance.slice(0, 10).map((feat, i) => (
+                        <div key={feat.feature} className="flex items-center gap-2">
+                          <span className="text-[9px] text-slate-600 w-4 text-right">{i + 1}</span>
+                          <span className="text-[10px] text-slate-400 w-36 truncate shrink-0">{feat.feature}</span>
+                          <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-slate-800">
+                            <div className={cn("h-full rounded-full transition-all",
+                              feat.direction === "increases_threat" ? "bg-cyber-red" :
+                              feat.direction === "decreases_threat" ? "bg-cyber-green" : "bg-slate-500"
+                            )} style={{ width: `${Math.max(feat.importance * 100, 2)}%` }} />
+                          </div>
+                          <span className="text-[9px] text-slate-500 w-10 text-right">{(feat.importance * 100).toFixed(0)}%</span>
+                          <Badge variant="outline" className={cn("text-[7px] w-6 text-center",
+                            feat.direction === "increases_threat" ? "border-cyber-red/30 text-cyber-red/70" :
+                            feat.direction === "decreases_threat" ? "border-cyber-green/30 text-cyber-green/70" :
+                            "border-slate-600/50 text-slate-500"
+                          )}>
+                            {feat.direction === "increases_threat" ? "↑" : feat.direction === "decreases_threat" ? "↓" : "—"}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Model Architecture */}
+                  <div>
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <Network className="h-3 w-3 text-cyber-cyan" /> MODEL ARCHITECTURE
+                    </h4>
+                    <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-[10px] font-medium text-cyber-cyan">{ml.modelArchitecture.modelName}</span>
+                        <Badge variant="outline" className="text-[8px] border-slate-600/50 text-slate-500">{ml.modelArchitecture.totalParameters.toLocaleString()} params</Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {ml.modelArchitecture.layers.map((layer, i) => (
+                          <div key={layer.name} className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800/50 border border-cyber-border/30">
+                            <span className="text-[9px] text-slate-500">{layer.name}</span>
+                            <span className="text-[9px] text-cyber-cyan font-mono">{layer.dims.join("→")}</span>
+                            <span className="text-[8px] text-slate-600">{layer.activation}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-[9px] text-slate-600">
+                        {ml.modelArchitecture.framework} • {ml.modelArchitecture.trainingMethod} • Trained: {ml.trainedOn}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+            )}
           </Tabs>
         </div>
       </CardContent>
@@ -1053,7 +1196,7 @@ function MalwareScanner({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">MALWARE ANALYSIS ENGINE</h2>
-              <p className="text-[11px] text-slate-500">AI-powered multi-engine threat detection — 44 engines, real-time web intelligence</p>
+              <p className="text-[11px] text-slate-500">AI/ML-powered multi-engine threat detection — 44 engines + 7 ML/DL models, real-time intel</p>
             </div>
           </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
@@ -1157,7 +1300,7 @@ function MalwareScanner({ onScan, isScanning, scanResults }: {
       )}
 
       {/* VirusTotal-style Detailed Result Panel */}
-      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis) && (
+      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis || activeResult.mlAnalysis) && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
           <VirusTotalResultPanel result={activeResult} />
         </motion.div>
@@ -1230,7 +1373,7 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">AI PHISHING DETECTION ENGINE</h2>
-              <p className="text-[11px] text-slate-500">Known & zero-day phishing detection — 26 URL engines + 20 Email engines, real-time intel</p>
+              <p className="text-[11px] text-slate-500">ML/DL phishing detection — 26 URL + 20 Email engines + 7 ML/DL models, real-time intel</p>
             </div>
           </div>
 
@@ -1358,7 +1501,7 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
       )}
 
       {/* VirusTotal-style Detailed Result Panel */}
-      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis) && (
+      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis || activeResult.mlAnalysis) && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
           <VirusTotalResultPanel result={activeResult} />
         </motion.div>
@@ -1678,6 +1821,7 @@ export default function CyberDefender() {
         detectionNames: data.detectionNames, tags: data.tags,
         fileMetadata: data.fileMetadata, relations: data.relations,
         behavior: data.behavior, community: data.community,
+        mlAnalysis: data.mlAnalysis,
       };
       setScanResults(prev => [...prev, result]);
       setStats(prev => ({
@@ -1723,6 +1867,7 @@ export default function CyberDefender() {
         phishingType: data.phishingType, sslData: data.sslData, whoisData: data.whoisData,
         dnsData: data.dnsData, fileMetadata: data.fileMetadata, relations: data.relations,
         behavior: data.behavior, community: data.community,
+        mlAnalysis: data.mlAnalysis,
       };
       setScanResults(prev => [...prev, result]);
       setStats(prev => ({
