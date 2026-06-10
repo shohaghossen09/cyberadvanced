@@ -59,7 +59,7 @@ interface ScanResult {
   dnsData?: Record<string, unknown>;
   webIntel?: { query: string; snippets: string[]; sources: { title: string; url: string }[] };
   mlAnalysis?: {
-    models: { name: string; type: string; prediction: string; confidence: number; probabilities: { safe: number; suspicious: number; malicious: number }; processingTimeMs: number; description: string }[];
+    models: { name: string; type: string; prediction: string; confidence: number; probabilities: { safe: number; suspicious: number; malicious: number }; processingTimeMs: number; description: string; metrics?: { accuracy: number; precision: number; recall: number; f1: number } }[];
     ensemblePrediction: string;
     ensembleConfidence: number;
     ensembleScore: number;
@@ -71,6 +71,10 @@ interface ScanResult {
     trainedOn: string;
     datasetSize: string;
     accuracy: string;
+    confusionMatrix?: number[][];
+    confidenceInterval?: { lower: number; upper: number };
+    adversarialRobustness?: number;
+    modelMetrics?: { name: string; accuracy: number; precision: number; recall: number; f1: number; inferenceMs: number }[];
   };
 }
 
@@ -1074,7 +1078,7 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                   {/* Model Predictions Grid */}
                   <div>
                     <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
-                      <Activity className="h-3 w-3 text-cyber-cyan" /> MODEL PREDICTIONS (7 ALGORITHMS)
+                      <Activity className="h-3 w-3 text-cyber-cyan" /> MODEL PREDICTIONS ({ml.models.length} ALGORITHMS)
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {ml.models.map((model, i) => (
@@ -1107,6 +1111,161 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                       ))}
                     </div>
                   </div>
+
+                  {/* Ensemble Voting Visualization */}
+                  <div>
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <Zap className="h-3 w-3 text-cyber-amber" /> ENSEMBLE VOTING DISTRIBUTION
+                    </h4>
+                    <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-2">
+                      {(() => {
+                        const votes = { safe: 0, suspicious: 0, malicious: 0 };
+                        ml.models.forEach(m => { votes[m.prediction as keyof typeof votes] = (votes[m.prediction as keyof typeof votes] || 0) + 1; });
+                        const total = ml.models.length;
+                        return (
+                          <>
+                            <div className="flex items-center gap-3 text-[10px]">
+                              <span className="text-slate-400 w-20">Safe</span>
+                              <div className="flex-1 h-2 rounded-full overflow-hidden bg-slate-800">
+                                <div className="bg-cyber-green h-full rounded-full transition-all" style={{ width: `${(votes.safe / total) * 100}%` }} />
+                              </div>
+                              <span className="text-cyber-green w-12 text-right font-mono">{votes.safe}/{total}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-[10px]">
+                              <span className="text-slate-400 w-20">Suspicious</span>
+                              <div className="flex-1 h-2 rounded-full overflow-hidden bg-slate-800">
+                                <div className="bg-cyber-amber h-full rounded-full transition-all" style={{ width: `${(votes.suspicious / total) * 100}%` }} />
+                              </div>
+                              <span className="text-cyber-amber w-12 text-right font-mono">{votes.suspicious}/{total}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-[10px]">
+                              <span className="text-slate-400 w-20">Malicious</span>
+                              <div className="flex-1 h-2 rounded-full overflow-hidden bg-slate-800">
+                                <div className="bg-cyber-red h-full rounded-full transition-all" style={{ width: `${(votes.malicious / total) * 100}%` }} />
+                              </div>
+                              <span className="text-cyber-red w-12 text-right font-mono">{votes.malicious}/{total}</span>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Confidence Interval + Adversarial Robustness */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {ml.confidenceInterval && (
+                      <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                        <h4 className="text-[9px] tracking-wider text-slate-500 uppercase mb-2">CONFIDENCE INTERVAL</h4>
+                        <div className="text-lg font-mono font-bold text-cyber-cyan">{(ml.ensembleConfidence * 100).toFixed(1)}%</div>
+                        <div className="text-[9px] text-slate-500 mt-1">
+                          Range: {(ml.confidenceInterval.lower * 100).toFixed(0)}% — {(ml.confidenceInterval.upper * 100).toFixed(0)}%
+                        </div>
+                        <div className="mt-2 h-1.5 rounded-full overflow-hidden bg-slate-800 relative">
+                          <div className="absolute h-full rounded-full bg-cyber-cyan/40" style={{ left: `${ml.confidenceInterval.lower * 100}%`, width: `${(ml.confidenceInterval.upper - ml.confidenceInterval.lower) * 100}%` }} />
+                          <div className="absolute h-full w-0.5 bg-cyber-cyan" style={{ left: `${ml.ensembleConfidence * 100}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {ml.adversarialRobustness !== undefined && (
+                      <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                        <h4 className="text-[9px] tracking-wider text-slate-500 uppercase mb-2">ADVERSARIAL ROBUSTNESS</h4>
+                        <div className="text-lg font-mono font-bold" style={{ color: ml.adversarialRobustness > 0.7 ? "#00ff88" : ml.adversarialRobustness > 0.4 ? "#ffaa00" : "#ff3344" }}>
+                          {(ml.adversarialRobustness * 100).toFixed(0)}%
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-1">
+                          {ml.adversarialRobustness > 0.7 ? "High — resilient to perturbation attacks" : ml.adversarialRobustness > 0.4 ? "Medium — partial vulnerability detected" : "Low — potential adversarial weakness"}
+                        </div>
+                        <div className="mt-2 h-1.5 rounded-full overflow-hidden bg-slate-800">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${ml.adversarialRobustness * 100}%`, backgroundColor: ml.adversarialRobustness > 0.7 ? "#00ff88" : ml.adversarialRobustness > 0.4 ? "#ffaa00" : "#ff3344" }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Confusion Matrix */}
+                  {ml.confusionMatrix && (
+                    <div>
+                      <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                        <Fingerprint className="h-3 w-3 text-cyber-cyan" /> CONFUSION MATRIX (3x3)
+                      </h4>
+                      <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                        <div className="flex items-center gap-1 mb-2">
+                          <span className="text-[8px] text-slate-600 w-16" />
+                          <span className="text-[8px] text-slate-500 flex-1 text-center">Pred: Safe</span>
+                          <span className="text-[8px] text-slate-500 flex-1 text-center">Pred: Susp</span>
+                          <span className="text-[8px] text-slate-500 flex-1 text-center">Pred: Mal</span>
+                        </div>
+                        {ml.confusionMatrix.map((row, ri) => {
+                          const rowTotal = row.reduce((a, b) => a + b, 0) || 1;
+                          const labels = ["True Safe", "True Susp", "True Mal"];
+                          return (
+                            <div key={ri} className="flex items-center gap-1 mb-0.5">
+                              <span className="text-[8px] text-slate-500 w-16">{labels[ri]}</span>
+                              {row.map((val, ci) => {
+                                const pct = val / rowTotal;
+                                const isCorrect = ri === ci;
+                                const maxVal = Math.max(...ml.confusionMatrix[ri]);
+                                const isMax = val === maxVal && val > 0;
+                                return (
+                                  <div key={ci} className="flex-1 mx-px">
+                                    <div className={cn("h-6 rounded text-[8px] font-mono flex items-center justify-center transition-all",
+                                      isCorrect ? "bg-cyber-green/20 text-cyber-green border border-cyber-green/30" : "bg-slate-800/50 text-slate-400 border border-transparent",
+                                      isMax && isCorrect ? "ring-1 ring-cyber-green/50" : ""
+                                    )}>
+                                      {val}
+                                    </div>
+                                    <div className="text-[7px] text-slate-600 text-center">{(pct * 100).toFixed(0)}%</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                        <div className="text-[8px] text-slate-600 mt-1.5">Diagonal = correct classifications | Based on 1,000-sample validation set</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Per-Model Metrics Table */}
+                  {ml.modelMetrics && ml.modelMetrics.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                        <Gauge className="h-3 w-3 text-cyber-cyan" /> MODEL PERFORMANCE METRICS
+                      </h4>
+                      <div className="rounded bg-cyber-dark/50 border border-cyber-border overflow-hidden">
+                        <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                          <table className="w-full text-[9px]">
+                            <thead className="bg-slate-800/50 sticky top-0">
+                              <tr className="text-slate-500 uppercase tracking-wider">
+                                <th className="text-left px-2 py-1.5 font-medium">Model</th>
+                                <th className="text-right px-2 py-1.5 font-medium">Acc</th>
+                                <th className="text-right px-2 py-1.5 font-medium">Prec</th>
+                                <th className="text-right px-2 py-1.5 font-medium">Rec</th>
+                                <th className="text-right px-2 py-1.5 font-medium">F1</th>
+                                <th className="text-right px-2 py-1.5 font-medium">Latency</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ml.modelMetrics.map((m, i) => (
+                                <tr key={m.name} className={cn("border-t border-cyber-border/20",
+                                  i % 2 === 0 ? "bg-transparent" : "bg-slate-800/20"
+                                )}>
+                                  <td className="px-2 py-1.5 text-slate-300 font-medium truncate max-w-[140px]">{m.name}</td>
+                                  <td className="text-right px-2 py-1.5 font-mono" style={{ color: m.accuracy >= 0.96 ? "#00ff88" : m.accuracy >= 0.94 ? "#ffaa00" : "#ff3344" }}>
+                                    {(m.accuracy * 100).toFixed(1)}%
+                                  </td>
+                                  <td className="text-right px-2 py-1.5 text-slate-400 font-mono">{(m.precision * 100).toFixed(1)}%</td>
+                                  <td className="text-right px-2 py-1.5 text-slate-400 font-mono">{(m.recall * 100).toFixed(1)}%</td>
+                                  <td className="text-right px-2 py-1.5 text-cyber-cyan font-mono font-medium">{(m.f1 * 100).toFixed(1)}%</td>
+                                  <td className="text-right px-2 py-1.5 text-slate-500 font-mono">{m.inferenceMs.toFixed(1)}ms</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Feature Importance */}
                   <div>
@@ -1196,7 +1355,7 @@ function MalwareScanner({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">MALWARE ANALYSIS ENGINE</h2>
-              <p className="text-[11px] text-slate-500">AI/ML-powered multi-engine threat detection — 44 engines + 7 ML/DL models, real-time intel</p>
+              <p className="text-[11px] text-slate-500">AI/ML-powered multi-engine threat detection — 44 engines + 11 ML/DL models, real-time intel</p>
             </div>
           </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
@@ -1373,7 +1532,7 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">AI PHISHING DETECTION ENGINE</h2>
-              <p className="text-[11px] text-slate-500">ML/DL phishing detection — 26 URL + 20 Email engines + 7 ML/DL models, real-time intel</p>
+              <p className="text-[11px] text-slate-500">ML/DL phishing detection — 26 URL + 20 Email engines + 11 ML/DL models, real-time intel</p>
             </div>
           </div>
 
@@ -1568,7 +1727,7 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor, onScan, isS
             </div>
             <div>
               <h2 className="text-sm font-semibold tracking-wider">INTRUSION DETECTION SYSTEM</h2>
-              <p className="text-[11px] text-slate-500">ML/DL-powered network intrusion detection — 21 IDS engines + 10 AI/ML/DL models, real-time threat intel</p>
+              <p className="text-[11px] text-slate-500">ML/DL-powered network intrusion detection — 21 IDS engines + 11 AI/ML/DL models, real-time threat intel</p>
             </div>
           </div>
           <form onSubmit={handleSubmit} className="flex gap-2">
@@ -2051,7 +2210,7 @@ export default function CyberDefender() {
       }));
 
       if (data.threatLevel === "safe") {
-        addAlert({ type: "scan", severity: "low", source: target, description: `IDS scan completed: No threats detected for "${target}" });
+        addAlert({ type: "scan", severity: "low", source: target, description: `IDS scan completed: No threats detected for "${target}"` });
       } else {
         addAlert({ type: "ids", severity: data.threatLevel as ThreatAlert["severity"], source: target,
           description: "IDS ALERT — " + (data.attackType || "Unknown") + " detected from \"" + target + "\" — Score: " + data.score + "/100, Severity: " + (data.severity || "Unknown") });
