@@ -29,8 +29,49 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+              var BIS_ATTRS = ['bis_size','bis_status','bis_frame_id','bis_body_id','bis_chainid','bis_depth','bis_skin_checked'];
+              function strip(el) {
+                if (!el || el.nodeType !== 1) return;
+                for (var i = 0; i < BIS_ATTRS.length; i++) el.removeAttribute(BIS_ATTRS[i]);
+                var attrs = el.attributes;
+                if (attrs) {
+                  for (var j = attrs.length - 1; j >= 0; j--) {
+                    var n = attrs[j].name;
+                    if (n.indexOf('__processed_') === 0 || n.indexOf('bis_') === 0) el.removeAttribute(n);
+                  }
+                }
+              }
+              function scan(root) {
+                var els = root.querySelectorAll ? root.querySelectorAll('*') : [];
+                for (var i = 0; i < els.length; i++) strip(els[i]);
+                strip(root);
+              }
+              scan(document.documentElement);
+              scan(document.head);
+              scan(document.body);
+              var mo = new MutationObserver(function(mutations) {
+                for (var m = 0; m < mutations.length; m++) {
+                  if (mutations[m].type === 'attributes') strip(mutations[m].target);
+                  if (mutations[m].addedNodes) {
+                    for (var n = 0; n < mutations[m].addedNodes.length; n++) {
+                      var node = mutations[m].addedNodes[n];
+                      if (node.nodeType === 1) { strip(node); scan(node); }
+                    }
+                  }
+                }
+              });
+              if (document.documentElement) mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+            })();`,
+          }}
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased font-mono`}
+        suppressHydrationWarning
       >
         {children}
         <Toaster />

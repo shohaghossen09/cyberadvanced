@@ -7,13 +7,15 @@ import {
   Activity, AlertTriangle, Bug, Zap, Wifi, WifiOff, Server,
   Database, Mail, ChevronRight, X, Check, Circle, TriangleAlert,
   Info, RefreshCw, ScanLine, Skull, Fingerprint, Hash,
-  AlertOctagon, MonitorDot, Gauge,
+  AlertOctagon, MonitorDot, Gauge, File, FileText, Link2,
+  Network, Users, MessageSquare, Tag, Clock, Copy,
+  ChevronDown, ChevronUp, ArrowRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -37,15 +39,34 @@ interface ScanResult {
   threatLevel: "critical" | "high" | "medium" | "low" | "safe";
   score: number;
   details: string;
+  aiEnhanced?: boolean;
+  aiAnalysis?: string;
   timestamp: string;
   engines: EngineResult[];
   indicators: string[];
   recommendations: string[];
+  malwareType?: string;
+  malwareFamily?: string;
+  phishingType?: string;
+  detectionNames?: string[];
+  tags?: string[];
+  fileMetadata?: Record<string, unknown>;
+  relations?: Record<string, unknown>;
+  behavior?: Record<string, unknown>;
+  community?: Record<string, unknown>;
+  sslData?: Record<string, unknown>;
+  whoisData?: Record<string, unknown>;
+  dnsData?: Record<string, unknown>;
 }
 
 interface EngineResult {
   name: string;
+  version?: string;
+  lastUpdated?: string;
   result: "malicious" | "suspicious" | "safe" | "undetected";
+  detectionName?: string;
+  scanTime?: string;
+  method?: string;
 }
 
 interface SystemStats {
@@ -175,8 +196,9 @@ function HistoryIcon({ className }: { className?: string }) {
 function Header({ stats, activeTab, onTabChange }: {
   stats: SystemStats; activeTab: string; onTabChange: (tab: string) => void;
 }) {
+  const [mounted, setMounted] = useState(false);
   const [time, setTime] = useState(new Date());
-  useEffect(() => { const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
+  useEffect(() => { setMounted(true); const i = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(i); }, []);
 
   return (
     <header className="border-b border-cyber-border bg-cyber-darker/90 backdrop-blur-md sticky top-0 z-50">
@@ -213,8 +235,10 @@ function Header({ stats, activeTab, onTabChange }: {
             <div className="flex items-center gap-2">
               <ThreatLevelIndicator level={stats.threatLevel} />
               <div className="text-right">
-                <div className="text-[10px] text-slate-500 font-mono">{time.toISOString().replace("T", " ").slice(0, 19)} UTC</div>
-                <div className="text-[10px] text-slate-600">UP: {formatUptime(Date.now() - stats.startTime)}</div>
+                {mounted && <div className="text-[10px] text-slate-500 font-mono">{time.toISOString().replace("T", " ").slice(0, 19)} UTC</div>}
+                {!mounted && <div className="text-[10px] text-slate-500 font-mono opacity-0">----</div>}
+                {mounted && <div className="text-[10px] text-slate-600">UP: {formatUptime(Date.now() - stats.startTime)}</div>}
+                {!mounted && <div className="text-[10px] text-slate-600 opacity-0">----</div>}
               </div>
             </div>
           </div>
@@ -407,6 +431,577 @@ function CommandCenter({ stats, alerts, scans }: {
   );
 }
 
+// ============ VIRUS TOTAL RESULT PANEL ============
+function VirusTotalResultPanel({ result }: { result: ScanResult }) {
+  const [activeTab, setActiveTab] = useState("detection");
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({ network: true });
+
+  const toggleSection = (key: string) => setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const malicious = result.engines.filter(e => e.result === "malicious").length;
+  const suspicious = result.engines.filter(e => e.result === "suspicious").length;
+  const harmless = result.engines.filter(e => e.result === "safe" || e.result === "undetected").length;
+  const total = result.engines.length;
+  const hasDetails = !!(result.fileMetadata || result.tags || result.detectionNames || result.sslData || result.whoisData || result.dnsData);
+  const hasRelations = !!result.relations;
+  const hasBehavior = !!result.behavior;
+  const hasCommunity = !!result.community;
+
+  // Safely cast nested data
+  const meta = result.fileMetadata as Record<string, unknown> | undefined;
+  const rels = result.relations as Record<string, string[]> | undefined;
+  const beh = result.behavior as Record<string, Record<string, unknown>[]> | undefined;
+  const comm = result.community as Record<string, unknown> | undefined;
+  const ssl = result.sslData as Record<string, unknown> | undefined;
+  const whois = result.whoisData as Record<string, unknown> | undefined;
+  const dns = result.dnsData as Record<string, unknown> | undefined;
+
+  const votes = comm?.votes as Record<string, number> | undefined;
+  const comments = comm?.comments as Array<Record<string, string>> | undefined;
+
+  const metaRow = (label: string, val: unknown) => {
+    if (val === undefined || val === null || val === "") return null;
+    return (
+      <div key={label} className="flex items-start gap-2 py-1.5 border-b border-cyber-border/30 last:border-0">
+        <span className="text-[10px] text-slate-500 tracking-wider uppercase w-28 shrink-0 pt-px">{label}</span>
+        <span className="text-[11px] text-slate-300 font-mono break-all">{String(val)}</span>
+      </div>
+    );
+  };
+
+  const CopyButton = ({ text }: { text: string }) => (
+    <button onClick={() => navigator.clipboard.writeText(text)} className="p-1 hover:bg-white/5 rounded transition-colors" title="Copy">
+      <Copy className="h-3 w-3 text-slate-500 hover:text-slate-300" />
+    </button>
+  );
+
+  return (
+    <Card className="cyber-card">
+      <CardContent className="p-0">
+        {/* Tab Navigation */}
+        <div className="border-b border-cyber-border">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="bg-transparent border-b-0 w-full justify-start rounded-none h-auto p-0 gap-0">
+              {[
+                { value: "detection", icon: ShieldAlert, label: "DETECTION" },
+                ...(hasDetails ? [{ value: "details", icon: FileText, label: "DETAILS" }] : []),
+                ...(hasRelations ? [{ value: "relations", icon: Network, label: "RELATIONS" }] : []),
+                ...(hasBehavior ? [{ value: "behavior", icon: Activity, label: "BEHAVIOR" }] : []),
+                ...(hasCommunity ? [{ value: "community", icon: Users, label: "COMMUNITY" }] : []),
+              ].map(tab => (
+                <TabsTrigger key={tab.value} value={tab.value}
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-cyber-cyan data-[state=active]:text-cyber-cyan data-[state=active]:shadow-none rounded-none border-b-2 border-transparent text-slate-500 hover:text-slate-300 px-4 py-3 transition-all text-[10px] tracking-wider uppercase font-semibold gap-1.5">
+                  <tab.icon className="h-3 w-3" /> {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            {/* DETECTION TAB */}
+            <TabsContent value="detection" className="mt-0">
+              <div className="p-4">
+                {/* Summary Bar */}
+                <div className="flex items-center gap-4 mb-4 p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                  <div className="flex-1">
+                    <div className="text-[11px] text-slate-400 mb-1">
+                      <span className="text-cyber-red font-bold">{malicious}</span>
+                      <span className="text-slate-500">/{total}</span> engines detected this {result.type === "malware" ? "file" : result.subType === "url" ? "URL" : "content"}
+                    </div>
+                    {/* Detection bar */}
+                    <div className="flex h-2 rounded-full overflow-hidden bg-slate-800">
+                      {total > 0 && (
+                        <>
+                          <div className="bg-cyber-red transition-all" style={{ width: `${(malicious / total) * 100}%` }} />
+                          <div className="bg-cyber-amber transition-all" style={{ width: `${(suspicious / total) * 100}%` }} />
+                          <div className="bg-cyber-green transition-all" style={{ width: `${(harmless / total) * 100}%` }} />
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {result.aiEnhanced && (
+                      <Badge variant="outline" className="text-[9px] tracking-wider border-cyber-cyan/50 text-cyber-cyan bg-cyber-cyan/5">
+                        <BrainIcon className="h-3 w-3 mr-1" /> AI ENHANCED
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {/* Engine List */}
+                <div className="space-y-1">
+                  {result.engines.map((engine, i) => (
+                    <motion.div key={engine.name} initial={{ opacity: 0, x: -5 }} animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.02 }}
+                      className={cn("flex items-center gap-2 p-2 rounded border text-[11px]",
+                        engine.result === "malicious" ? "threat-bg-critical" :
+                        engine.result === "suspicious" ? "threat-bg-high" : "bg-slate-800/20 border-slate-700/30"
+                      )}>
+                      {/* Engine name + version */}
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        {engine.result === "malicious" ? <X className="h-3.5 w-3.5 text-cyber-red shrink-0" /> :
+                         engine.result === "suspicious" ? <AlertTriangle className="h-3.5 w-3.5 text-[#ff6b35] shrink-0" /> :
+                         <Check className="h-3.5 w-3.5 text-slate-500 shrink-0" />}
+                        <span className="text-slate-300 font-medium truncate">{engine.name}</span>
+                        {engine.version && <span className="text-[9px] text-slate-600 font-mono shrink-0">v{engine.version}</span>}
+                      </div>
+                      {/* Method badge */}
+                      {engine.method && (
+                        <Badge variant="outline" className="text-[8px] tracking-wider border-slate-600/50 text-slate-500 shrink-0 hidden sm:inline-flex">
+                          {engine.method.toUpperCase()}
+                        </Badge>
+                      )}
+                      {/* Detection name */}
+                      {engine.detectionName && (
+                        <span className="text-[10px] text-slate-400 font-mono truncate max-w-[180px] hidden md:inline">{engine.detectionName}</span>
+                      )}
+                      {/* Scan time */}
+                      {engine.scanTime && (
+                        <span className="text-[9px] text-slate-600 font-mono shrink-0">{engine.scanTime}</span>
+                      )}
+                      {/* Result badge */}
+                      <Badge variant="outline" className={cn("text-[9px] tracking-wider shrink-0",
+                        engine.result === "malicious" ? "border-cyber-red/50 text-cyber-red" :
+                        engine.result === "suspicious" ? "border-cyber-amber/50 text-cyber-amber" :
+                        "border-slate-600/50 text-slate-500"
+                      )}>
+                        {engine.result.toUpperCase()}
+                      </Badge>
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Detection Names from engines */}
+                {result.detectionNames && result.detectionNames.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-cyber-border">
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <ShieldAlert className="h-3 w-3" /> DETECTION NAMES
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.detectionNames.map((name, i) => (
+                        <Badge key={i} variant="outline" className="text-[9px] font-mono border-cyber-red/30 text-cyber-red/80 bg-cyber-red/5">
+                          {name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* AI Analysis */}
+                {result.aiAnalysis && (
+                  <div className="mt-4 pt-3 border-t border-cyber-border">
+                    <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                      <BrainIcon className="h-3 w-3 text-cyber-cyan" /> AI DEEP ANALYSIS
+                    </h4>
+                    <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border text-[11px] text-slate-400 leading-relaxed max-h-40 overflow-y-auto cyber-scrollbar whitespace-pre-wrap">
+                      {result.aiAnalysis}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* DETAILS TAB */}
+            {hasDetails && (
+              <TabsContent value="details" className="mt-0">
+                <div className="p-4 space-y-4">
+                  {result.type === "malware" && meta ? (
+                    <>
+                      {/* File Information */}
+                      <div>
+                        <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                          <File className="h-3 w-3 text-cyber-cyan" /> FILE INFORMATION
+                        </h4>
+                        <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-0">
+                          {metaRow("Type", meta.fileType)}
+                          {metaRow("Size", meta.fileSize)}
+                          {metaRow("Magic", meta.magic)}
+                          {metaRow("Input Type", meta.inputType)}
+                        </div>
+                      </div>
+
+                      {/* Hash Information */}
+                      <div>
+                        <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                          <Hash className="h-3 w-3 text-cyber-cyan" /> CRYPTOGRAPHIC HASHES
+                        </h4>
+                        <div className="space-y-1.5">
+                          {["md5", "sha1", "sha256", "ssdeep"].map(h => {
+                            const val = meta[h];
+                            if (!val) return null;
+                            return (
+                              <div key={h} className="flex items-center gap-2 p-2 rounded bg-slate-800/30 border border-cyber-border/50">
+                                <span className="text-[10px] text-slate-500 uppercase w-12 tracking-wider">{h}</span>
+                                <span className="text-[10px] text-slate-300 font-mono flex-1 break-all">{String(val)}</span>
+                                <CopyButton text={String(val)} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Submission Info */}
+                      <div>
+                        <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                          <Clock className="h-3 w-3 text-cyber-cyan" /> SUBMISSION & REPUTATION
+                        </h4>
+                        <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-0">
+                          {metaRow("First Seen", meta.firstSeen)}
+                          {metaRow("Last Analysis", meta.lastAnalysis)}
+                          {metaRow("Submissions", meta.submissionCount)}
+                          {metaRow("Reputation", meta.reputationScore)}
+                        </div>
+                      </div>
+
+                      {/* Tags */}
+                      {result.tags && result.tags.length > 0 && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Tag className="h-3 w-3 text-cyber-amber" /> TAGS
+                          </h4>
+                          <div className="flex flex-wrap gap-1.5">
+                            {result.tags.map((tag, i) => (
+                              <Badge key={i} variant="outline" className="text-[9px] border-cyber-amber/30 text-cyber-amber/80 bg-cyber-amber/5">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Packers */}
+                      {meta.packers && Array.isArray(meta.packers) && meta.packers.length > 0 && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <File className="h-3 w-3 text-cyber-red" /> PACKERS
+                          </h4>
+                          <div className="flex flex-wrap gap-1.5">
+                            {meta.packers.map((p: unknown, i: number) => (
+                              <Badge key={i} variant="outline" className="text-[9px] border-cyber-red/30 text-cyber-red/80 bg-cyber-red/5">
+                                {String(p)}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* TRID */}
+                      {meta.trid && Array.isArray(meta.trid) && meta.trid.length > 0 && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <FileText className="h-3 w-3 text-cyber-cyan" /> TRID
+                          </h4>
+                          <div className="space-y-1">
+                            {meta.trid.map((t: unknown, i: number) => (
+                              <div key={i} className="text-[10px] text-slate-400 font-mono p-1.5 rounded bg-slate-800/20">{String(t)}</div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {/* Phishing Details */}
+                      {/* Target Info */}
+                      {meta && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Link2 className="h-3 w-3 text-cyber-cyan" /> TARGET INFORMATION
+                          </h4>
+                          <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-0">
+                            {metaRow("Type", meta.targetType)}
+                            {metaRow("Category", meta.category)}
+                            {metaRow("Threat Classification", meta.threatClassification)}
+                            {metaRow("First Seen", meta.firstSeen)}
+                            {metaRow("Last Analysis", meta.lastAnalysis)}
+                            {metaRow("Submissions", meta.submissionCount)}
+                            {metaRow("Reputation", meta.reputationScore)}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* SSL Certificate */}
+                      {ssl && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Shield className="h-3 w-3 text-cyber-green" /> SSL CERTIFICATE
+                          </h4>
+                          <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-0">
+                            {metaRow("Issuer", ssl.issuer)}
+                            {metaRow("Valid From", ssl.validFrom)}
+                            {metaRow("Valid To", ssl.validTo)}
+                            {metaRow("Protocol", ssl.protocol)}
+                            {ssl.isExpired !== undefined && (
+                              <div className="flex items-start gap-2 py-1.5 border-b border-cyber-border/30 last:border-0">
+                                <span className="text-[10px] text-slate-500 tracking-wider uppercase w-28 shrink-0 pt-px">Status</span>
+                                <Badge variant="outline" className={cn("text-[9px] tracking-wider",
+                                  ssl.isExpired ? "border-cyber-red/50 text-cyber-red bg-cyber-red/5" :
+                                  "border-cyber-green/50 text-cyber-green bg-cyber-green/5"
+                                )}>
+                                  {ssl.isExpired ? "EXPIRED" : ssl.isSelfSigned ? "SELF-SIGNED" : "VALID"}
+                                </Badge>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* WHOIS Data */}
+                      {whois && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Globe className="h-3 w-3 text-cyber-cyan" /> WHOIS DATA
+                          </h4>
+                          <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border space-y-0">
+                            {metaRow("Registrar", whois.registrar)}
+                            {metaRow("Created", whois.creationDate)}
+                            {metaRow("Expires", whois.expirationDate)}
+                            {metaRow("Registrant Org", whois.registrantOrg)}
+                            {metaRow("Registrant Country", whois.registrantCountry)}
+                            {whois.nameServers && Array.isArray(whois.nameServers) && whois.nameServers.length > 0 && (
+                              <div className="flex items-start gap-2 py-1.5">
+                                <span className="text-[10px] text-slate-500 tracking-wider uppercase w-28 shrink-0 pt-px">NS</span>
+                                <div className="flex flex-wrap gap-1">
+                                  {whois.nameServers.map((ns: unknown, i: number) => (
+                                    <Badge key={i} variant="outline" className="text-[9px] font-mono border-slate-600/50 text-slate-400">
+                                      {String(ns)}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* DNS Records */}
+                      {dns && (
+                        <div>
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Server className="h-3 w-3 text-cyber-cyan" /> DNS RECORDS
+                          </h4>
+                          <div className="space-y-2">
+                            {(["aRecords", "mxRecords", "nsRecords", "txtRecords", "soaRecord"] as const).map(recType => {
+                              const val = dns[recType];
+                              if (!val) return null;
+                              const label = recType.replace("Records", "").toUpperCase() + (recType === "soaRecord" ? " SOA" : " RECORDS");
+                              return (
+                                <div key={recType} className="p-2 rounded bg-slate-800/30 border border-cyber-border/50">
+                                  <div className="text-[9px] text-slate-500 tracking-wider uppercase mb-1">{label}</div>
+                                  <div className="space-y-0.5">
+                                    {(Array.isArray(val) ? val : [val]).map((r: unknown, i: number) => (
+                                      <div key={i} className="text-[10px] text-slate-300 font-mono">{String(r)}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </TabsContent>
+            )}
+
+            {/* RELATIONS TAB */}
+            {hasRelations && rels && (
+              <TabsContent value="relations" className="mt-0">
+                <div className="p-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {([
+                      { key: "contactedDomains", label: "CONTACTED DOMAINS", icon: Globe, color: "text-cyber-cyan" },
+                      { key: "contactedIPs", label: "CONTACTED IPS", icon: Network, color: "text-cyber-red" },
+                      { key: "contactedURLs", label: "CONTACTED URLS", icon: Link2, color: "text-cyber-amber" },
+                      { key: "downloadedFiles", label: "DOWNLOADED FILES", icon: File, color: "text-cyber-red" },
+                      { key: "executingFiles", label: "EXECUTING FILES", icon: FileText, color: "text-cyber-red" },
+                      { key: "similarFiles", label: "SIMILAR FILES", icon: Copy, color: "text-slate-400" },
+                    ] as const).map(({ key, label, icon: Icon, color }) => {
+                      const items = rels[key];
+                      if (!items || !Array.isArray(items) || items.length === 0) return null;
+                      return (
+                        <div key={key} className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                          <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                            <Icon className={cn("h-3 w-3", color)} /> {label}
+                            <Badge variant="outline" className="text-[8px] border-slate-600/50 text-slate-500">{items.length}</Badge>
+                          </h4>
+                          <ScrollArea className="max-h-36 cyber-scrollbar">
+                            <div className="space-y-1">
+                              {items.map((item: unknown, i: number) => (
+                                <div key={i} className="flex items-center gap-1.5 p-1.5 rounded bg-slate-800/30 text-[10px] font-mono text-slate-400 hover:bg-white/[0.02] transition-colors cursor-pointer">
+                                  <ArrowRight className="h-2.5 w-2.5 shrink-0 text-slate-600" />
+                                  <span className="truncate">{String(item)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </TabsContent>
+            )}
+
+            {/* BEHAVIOR TAB */}
+            {hasBehavior && beh && (
+              <TabsContent value="behavior" className="mt-0">
+                <div className="p-4 space-y-3">
+                  {([
+                    { key: "network", label: "NETWORK ACTIVITY", icon: Network, color: "text-cyber-cyan",
+                      cols: ["action", "destination", "port", "protocol"] },
+                    { key: "filesystem", label: "FILESYSTEM ACTIVITY", icon: File, color: "text-cyber-amber",
+                      cols: ["action", "target", "description"] },
+                    { key: "registry", label: "REGISTRY ACTIVITY", icon: Database, color: "text-cyber-red",
+                      cols: ["action", "key", "description"] },
+                    { key: "process", label: "PROCESS ACTIVITY", icon: Activity, color: "text-[#ff6b35]",
+                      cols: ["action", "process", "description"] },
+                  ] as const).map(({ key, label, icon: Icon, color, cols }) => {
+                    const rows = beh[key];
+                    if (!rows || !Array.isArray(rows) || rows.length === 0) return null;
+                    const isExpanded = expandedSections[key] ?? false;
+                    return (
+                      <div key={key} className="rounded border border-cyber-border overflow-hidden">
+                        <button onClick={() => toggleSection(key)}
+                          className="w-full flex items-center justify-between p-3 bg-cyber-dark/50 hover:bg-cyber-dark/70 transition-colors">
+                          <div className="flex items-center gap-2">
+                            <Icon className={cn("h-3.5 w-3.5", color)} />
+                            <span className="text-[10px] tracking-wider text-slate-400 uppercase font-semibold">{label}</span>
+                            <Badge variant="outline" className="text-[8px] border-slate-600/50 text-slate-500">{rows.length}</Badge>
+                          </div>
+                          {isExpanded ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
+                        </button>
+                        {isExpanded && (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-[10px]">
+                              <thead>
+                                <tr className="border-t border-cyber-border">
+                                  {cols.map(col => (
+                                    <th key={col} className="text-left px-3 py-1.5 text-[9px] text-slate-500 tracking-wider uppercase font-medium bg-slate-800/30">
+                                      {col.replace(/([A-Z])/g, " $1").trim()}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map((row: Record<string, unknown>, i: number) => (
+                                  <tr key={i} className="border-t border-cyber-border/30 hover:bg-white/[0.02]">
+                                    {cols.map(col => (
+                                      <td key={col} className="px-3 py-1.5 text-slate-400 font-mono max-w-[200px] truncate">
+                                        {row[col] !== undefined ? String(row[col]) : "—"}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </TabsContent>
+            )}
+
+            {/* COMMUNITY TAB */}
+            {hasCommunity && comm && (
+              <TabsContent value="community" className="mt-0">
+                <div className="p-4 space-y-4">
+                  {/* Vote Bar */}
+                  {votes && (
+                    <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-[10px] tracking-wider text-slate-500 uppercase flex items-center gap-1.5">
+                          <Users className="h-3 w-3" /> COMMUNITY VOTES
+                        </h4>
+                        {comm.communityScore !== undefined && (
+                          <Badge variant="outline" className="text-[9px] tracking-wider border-cyber-cyan/50 text-cyber-cyan">
+                            SCORE: {String(comm.communityScore)}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex h-3 rounded-full overflow-hidden bg-slate-800 mb-2">
+                        {(() => {
+                          const h = votes.harmless || 0;
+                          const m = votes.malicious || 0;
+                          const t = h + m;
+                          return t > 0 ? (
+                            <>
+                              <div className="bg-cyber-green" style={{ width: `${(h / t) * 100}%` }} />
+                              <div className="bg-cyber-red" style={{ width: `${(m / t) * 100}%` }} />
+                            </>
+                          ) : null;
+                        })()}
+                      </div>
+                      <div className="flex justify-between text-[10px]">
+                        <span className="text-cyber-green flex items-center gap-1">
+                          <Check className="h-3 w-3" /> {votes.harmless || 0} Harmless
+                        </span>
+                        <span className="text-cyber-red flex items-center gap-1">
+                          <X className="h-3 w-3" /> {votes.malicious || 0} Malicious
+                        </span>
+                      </div>
+                      {comm.totalVotes !== undefined && (
+                        <div className="text-[9px] text-slate-600 mt-1 text-center">Total: {String(comm.totalVotes)} votes</div>
+                      )}
+                      {comm.popularityRank !== undefined && (
+                        <div className="text-[9px] text-slate-600 mt-0.5 text-center">Popularity Rank: #{String(comm.popularityRank)}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Comments */}
+                  {comments && comments.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                        <MessageSquare className="h-3 w-3 text-cyber-amber" /> COMMENTS ({comments.length})
+                      </h4>
+                      <div className="space-y-2 max-h-64 overflow-y-auto cyber-scrollbar">
+                        {comments.map((c, i) => (
+                          <div key={i} className="p-2.5 rounded bg-slate-800/30 border border-cyber-border/50">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-[10px] text-slate-400 font-medium">{c.user}</span>
+                              {c.verdict && (
+                                <Badge variant="outline" className={cn("text-[8px] tracking-wider",
+                                  c.verdict === "malicious" ? "border-cyber-red/50 text-cyber-red" :
+                                  c.verdict === "suspicious" ? "border-cyber-amber/50 text-cyber-amber" :
+                                  "border-cyber-green/50 text-cyber-green"
+                                )}>{c.verdict.toUpperCase()}</Badge>
+                              )}
+                              <span className="text-[9px] text-slate-600 font-mono ml-auto">{c.date}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 leading-relaxed">{c.text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tags */}
+                  {result.tags && result.tags.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] tracking-wider text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                        <Tag className="h-3 w-3 text-cyber-cyan" /> COMMUNITY TAGS
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {result.tags.map((tag, i) => (
+                          <Badge key={i} variant="outline" className="text-[9px] border-cyber-cyan/30 text-cyber-cyan/80 bg-cyber-cyan/5">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+            )}
+          </Tabs>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ============ MALWARE SCANNER ============
 function MalwareScanner({ onScan, isScanning, scanResults }: {
   onScan: (target: string) => void; isScanning: boolean; scanResults: ScanResult[];
@@ -532,6 +1127,13 @@ function MalwareScanner({ onScan, isScanning, scanResults }: {
               </div>
             </CardContent>
           </Card>
+        </motion.div>
+      )}
+
+      {/* VirusTotal-style Detailed Result Panel */}
+      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis) && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <VirusTotalResultPanel result={activeResult} />
         </motion.div>
       )}
 
@@ -726,6 +1328,13 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
               <EngineGrid engines={activeResult.engines} compact />
             </CardContent>
           </Card>
+        </motion.div>
+      )}
+
+      {/* VirusTotal-style Detailed Result Panel */}
+      {activeResult && (activeResult.fileMetadata || activeResult.relations || activeResult.behavior || activeResult.community || activeResult.aiAnalysis) && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <VirusTotalResultPanel result={activeResult} />
         </motion.div>
       )}
 
@@ -1036,8 +1645,13 @@ export default function CyberDefender() {
 
       const result: ScanResult = {
         id: `scan-${Date.now()}`, type: "malware", target, threatLevel: data.threatLevel,
-        score: data.score, details: data.details, timestamp: new Date().toISOString(),
+        score: data.score, details: data.details, aiEnhanced: data.aiEnhanced, aiAnalysis: data.aiAnalysis,
+        timestamp: new Date().toISOString(),
         engines: data.engines || [], indicators: data.indicators || [], recommendations: data.recommendations || [],
+        malwareType: data.malwareType, malwareFamily: data.malwareFamily,
+        detectionNames: data.detectionNames, tags: data.tags,
+        fileMetadata: data.fileMetadata, relations: data.relations,
+        behavior: data.behavior, community: data.community,
       };
       setScanResults(prev => [...prev, result]);
       setStats(prev => ({
@@ -1077,8 +1691,12 @@ export default function CyberDefender() {
 
       const result: ScanResult = {
         id: `scan-${Date.now()}`, type: "phishing", subType: mode, target, threatLevel: data.threatLevel,
-        score: data.score, details: data.details, timestamp: new Date().toISOString(),
+        score: data.score, details: data.details, aiEnhanced: data.aiEnhanced, aiAnalysis: data.aiAnalysis,
+        timestamp: new Date().toISOString(),
         engines: data.engines || [], indicators: data.indicators || [], recommendations: data.recommendations || [],
+        phishingType: data.phishingType, sslData: data.sslData, whoisData: data.whoisData,
+        dnsData: data.dnsData, fileMetadata: data.fileMetadata, relations: data.relations,
+        behavior: data.behavior, community: data.community,
       };
       setScanResults(prev => [...prev, result]);
       setStats(prev => ({
@@ -1105,7 +1723,7 @@ export default function CyberDefender() {
   }, [addAlert]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-cyber-darker cyber-grid-bg relative">
+    <div className="min-h-screen flex flex-col bg-cyber-darker cyber-grid-bg relative" suppressHydrationWarning>
       <div className="fixed inset-0 cyber-scanline pointer-events-none z-[100] opacity-30" />
       <Header stats={stats} activeTab={activeTab} onTabChange={setActiveTab} />
 
