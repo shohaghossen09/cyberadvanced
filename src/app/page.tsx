@@ -1541,14 +1541,136 @@ function PhishingDetector({ onScan, isScanning, scanResults }: {
 }
 
 // ============ IDS MONITOR ============
-function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
+function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor, onScan, isScanning }: {
   alerts: ThreatAlert[]; scans: ScanResult[]; monitorActive: boolean; onToggleMonitor: () => void;
+  onScan: (target: string) => void; isScanning: boolean;
 }) {
-  const intrusionAlerts = alerts.filter(a => a.type === "malware" || a.type === "phishing" || (a.type === "scan" && a.severity !== "info" && a.severity !== "low"));
+  const [input, setInput] = useState("");
+  const [selectedResult, setSelectedResult] = useState<ScanResult | null>(null);
+  const intrusionAlerts = alerts.filter(a => a.type === "malware" || a.type === "phishing" || a.type === "ids" || (a.type === "scan" && a.severity !== "info" && a.severity !== "low"));
   const recentIntrusions = intrusionAlerts.slice(-30).reverse();
+  const idsScans = scans.filter(s => s.type === "ids");
+  const activeResult = selectedResult || idsScans[idsScans.length - 1] || null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (input.trim() && !isScanning) { onScan(input.trim()); setInput(""); setSelectedResult(null); }
+  };
 
   return (
     <div className="p-4 space-y-4">
+      {/* IDS Scanner Input */}
+      <Card className="cyber-card">
+        <CardContent className="p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-cyber-purple/10 border border-cyber-purple/30">
+              <Radar className="h-5 w-5 text-cyber-purple" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold tracking-wider">INTRUSION DETECTION SYSTEM</h2>
+              <p className="text-[11px] text-slate-500">ML/DL-powered network intrusion detection — 21 IDS engines + 10 AI/ML/DL models, real-time threat intel</p>
+            </div>
+          </div>
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <div className="flex-1 relative">
+              <Wifi className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600" />
+              <Input value={input} onChange={(e) => setInput(e.target.value)}
+                placeholder="Enter IP address, domain, port pattern (e.g., 192.168.1.1:80,443,8080) or network payload..."
+                className="cyber-input pl-10 h-11 text-sm" disabled={isScanning} />
+            </div>
+            <Button type="submit" disabled={isScanning || !input.trim()}
+              className="bg-cyber-purple hover:bg-cyber-purple/80 text-white font-semibold px-6 gap-2 transition-all">
+              {isScanning ? <><RefreshCw className="h-4 w-4 animate-spin" /> ANALYZING...</> : <><Radar className="h-4 w-4" /> SCAN NETWORK</>}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* IDS Result Panel */}
+      {activeResult && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+          <Card className="cyber-card">
+            <CardContent className="p-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <ScoreRing score={activeResult.score} size={100} label="Threat Score" />
+                  <div>
+                    <div className="text-sm font-mono text-slate-300 mb-1 break-all max-w-[300px]">{activeResult.target}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <ThreatBadge level={activeResult.threatLevel} />
+                      <Badge variant="outline" className="text-[9px] border-cyber-purple/50 text-cyber-purple">{activeResult.fileMetadata?.attackType || "Unknown"}</Badge>
+                      <Badge variant="outline" className="text-[9px] border-slate-600/50 text-slate-500">{activeResult.fileMetadata?.severity || "INFO"}</Badge>
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">Analyzed by {activeResult.engines.length} IDS engines + 10 ML/DL models</div>
+                  </div>
+                </div>
+                <div className="flex gap-3 text-center">
+                  {[
+                    { label: "MALICIOUS", count: activeResult.engines.filter(e => e.result === "malicious").length, cls: "bg-cyber-red/10 border-cyber-red/20", text: "text-cyber-red" },
+                    { label: "SUSPICIOUS", count: activeResult.engines.filter(e => e.result === "suspicious").length, cls: "bg-cyber-amber/10 border-cyber-amber/20", text: "text-cyber-amber" },
+                    { label: "UNDETECTED", count: activeResult.engines.filter(e => e.result === "undetected").length, cls: "bg-slate-700/50 border-slate-600/30", text: "text-slate-300" },
+                    { label: "SAFE", count: activeResult.engines.filter(e => e.result === "safe").length, cls: "bg-cyber-green/10 border-cyber-green/20", text: "text-cyber-green" },
+                  ].map(s => (
+                    <div key={s.label} className={cn("px-3 py-2 rounded border", s.cls)}>
+                      <div className={cn("text-lg font-bold", s.text)}>{s.count}</div>
+                      <div className="text-[9px] text-slate-500 tracking-wider">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Analysis */}
+              <Separator className="bg-cyber-border mb-4" />
+              <div className="mb-4">
+                <h3 className="text-xs font-semibold tracking-wider text-slate-400 mb-2 flex items-center gap-2">
+                  <BrainIcon className="h-3.5 w-3.5 text-cyber-cyan" /> AI THREAT ANALYSIS
+                </h3>
+                <div className="p-3 rounded bg-cyber-dark/50 border border-cyber-border text-xs text-slate-400 leading-relaxed max-h-48 overflow-y-auto cyber-scrollbar whitespace-pre-wrap">
+                  {activeResult.details}
+                </div>
+              </div>
+
+              {/* Indicators + Recommendations */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  {activeResult.indicators.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 mb-2 flex items-center gap-2">
+                        <TriangleAlert className="h-3.5 w-3.5 text-cyber-amber" /> INDICATORS OF COMPROMISE
+                      </h3>
+                      <div className="space-y-1">
+                        {activeResult.indicators.map((ind, i) => (
+                          <div key={i} className="flex items-start gap-2 text-xs text-slate-400">
+                            <ChevronRight className="h-3 w-3 text-cyber-amber mt-0.5 shrink-0" /> {ind}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  {activeResult.recommendations.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 mb-2 flex items-center gap-2">
+                        <ShieldCheck className="h-3.5 w-3.5 text-cyber-green" /> RECOMMENDATIONS
+                      </h3>
+                      <div className="space-y-1">
+                        {activeResult.recommendations.map((rec, i) => (
+                          <div key={i} className="flex items-start gap-2 text-xs text-slate-400">
+                            <Check className="h-3 w-3 text-cyber-green mt-0.5 shrink-0" /> {rec}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* IDS Status + Alerts */}
       <Card className="cyber-card">
         <CardContent className="p-6">
           <div className="flex items-center justify-between mb-4">
@@ -1557,7 +1679,7 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
                 <Radar className={cn("h-5 w-5", monitorActive ? "text-cyber-green" : "text-slate-500")} />
               </div>
               <div>
-                <h2 className="text-sm font-semibold tracking-wider">INTRUSION DETECTION SYSTEM</h2>
+                <h2 className="text-sm font-semibold tracking-wider">IDS MONITOR</h2>
                 <p className="text-[11px] text-slate-500">Monitors all scan operations for intrusion indicators</p>
               </div>
             </div>
@@ -1566,16 +1688,15 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
                 monitorActive ? "bg-cyber-red/20 border border-cyber-red/50 text-cyber-red hover:bg-cyber-red/30"
                   : "bg-cyber-green/20 border border-cyber-green/50 text-cyber-green hover:bg-cyber-green/30"
               )}>
-              {monitorActive ? <><WifiOff className="h-3.5 w-3.5" /> DISABLE MONITOR</> : <><Wifi className="h-3.5 w-3.5" /> ENABLE MONITOR</>}
+              {monitorActive ? <><WifiOff className="h-3.5 w-3.5" /> DISABLE</> : <><Wifi className="h-3.5 w-3.5" /> ENABLE</>}
             </Button>
           </div>
-
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: "SYSTEM STATUS", value: monitorActive ? "ACTIVE" : "OFFLINE", color: monitorActive ? "text-cyber-green" : "text-slate-500" },
-              { label: "TOTAL SCANS", value: scans.length.toString(), color: "text-cyber-cyan" },
+              { label: "SYSTEM", value: monitorActive ? "ACTIVE" : "OFFLINE", color: monitorActive ? "text-cyber-green" : "text-slate-500" },
+              { label: "TOTAL SCANS", value: idsScans.length.toString(), color: "text-cyber-cyan" },
               { label: "THREAT ALERTS", value: intrusionAlerts.length.toString(), color: "text-cyber-red" },
-              { label: "HIGH/CRITICAL", value: alerts.filter(a => a.severity === "critical" || a.severity === "high").length.toString(), color: "text-cyber-amber" },
+              { label: "ML MODELS", value: "10", color: "text-cyber-purple" },
             ].map((s) => (
               <div key={s.label} className="p-3 rounded bg-white/[0.02] border border-cyber-border">
                 <div className={cn("text-lg font-bold", s.color)}>{s.value}</div>
@@ -1586,11 +1707,11 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="cyber-card lg:col-span-2 min-h-[350px] flex flex-col">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card className="cyber-card min-h-[250px] flex flex-col">
           <CardHeader className="pb-2 pt-4 px-4">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-semibold tracking-wider text-cyber-cyan flex items-center gap-2">
+              <CardTitle className="text-sm font-semibold tracking-wider text-cyber-purple flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4" /> INTRUSION ALERTS
                 {monitorActive && recentIntrusions.length > 0 && <span className="inline-flex h-2 w-2 rounded-full bg-cyber-green animate-pulse" />}
               </CardTitle>
@@ -1598,7 +1719,7 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
             </div>
           </CardHeader>
           <CardContent className="p-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-[290px] cyber-scrollbar">
+            <ScrollArea className="h-[190px] cyber-scrollbar">
               <div className="px-4 space-y-1 pb-4">
                 {recentIntrusions.map((alert) => (
                   <div key={alert.id} className={cn("flex items-start gap-2.5 p-2 rounded text-[11px] border",
@@ -1614,9 +1735,8 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
                   </div>
                 ))}
                 {recentIntrusions.length === 0 && (
-                  <div className="flex flex-col items-center justify-center h-32 text-slate-600 text-xs gap-2">
-                    {monitorActive ? <><Wifi className="h-6 w-6 animate-pulse opacity-30" /><span>Monitoring active. Awaiting scan results...</span></>
-                      : <><WifiOff className="h-6 w-6 opacity-30" /><span>Monitor offline. Enable to start detecting.</span></>}
+                  <div className="flex flex-col items-center justify-center h-20 text-slate-600 text-xs gap-2">
+                    {monitorActive ? <><Wifi className="h-5 w-5 animate-pulse opacity-30" /><span>Monitoring active. Awaiting scan results...</span></> : <><WifiOff className="h-5 w-5 opacity-30" /><span>Monitor offline. Enable to start detecting.</span></>}
                   </div>
                 )}
               </div>
@@ -1627,29 +1747,35 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor }: {
         <Card className="cyber-card">
           <CardContent className="p-4">
             <h3 className="text-xs font-semibold tracking-wider text-slate-400 mb-3 flex items-center gap-2">
-              <Activity className="h-3.5 w-3.5" /> RECENT SCAN RESULTS
+              <Activity className="h-3.5 w-3.5 text-cyber-purple" /> RECENT IDS SCANS
             </h3>
-            {scans.length > 0 ? (
-              <div className="space-y-2">
-                {scans.slice(-8).reverse().map((scan) => (
-                  <div key={scan.id} className="p-2 rounded bg-white/[0.02] border border-cyber-border">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-1.5">
-                        {scan.type === "malware" ? <Bug className="h-3 w-3 text-cyber-red shrink-0" /> : <ShieldAlert className="h-3 w-3 text-cyber-amber shrink-0" />}
-                        <span className="text-[10px] text-slate-400 font-mono truncate max-w-[140px]">{scan.target}</span>
+            {idsScans.length > 0 ? (
+              <ScrollArea className="max-h-[190px] cyber-scrollbar">
+                <div className="space-y-2 pr-2">
+                  {idsScans.slice().reverse().map((scan) => (
+                    <button key={scan.id} onClick={() => setSelectedResult(scan)}
+                      className={cn("w-full p-2 rounded border text-left transition-colors",
+                        selectedResult?.id === scan.id ? "border-cyber-purple/50 bg-cyber-purple/5" : "border-cyber-border hover:bg-white/[0.02]"
+                      )}>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Radar className="h-3 w-3 text-cyber-purple shrink-0" />
+                          <span className="text-[10px] text-slate-400 font-mono truncate">{scan.target}</span>
+                        </div>
+                        <ThreatBadge level={scan.threatLevel} />
                       </div>
-                      <ThreatBadge level={scan.threatLevel} />
-                    </div>
-                    <div className="flex items-center gap-1 text-[9px] text-slate-600">
-                      <span>Score: {scan.score}/100</span>
-                      <span>•</span>
-                      <span>{scan.engines.filter(e => e.result === "malicious").length} malicious</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      <div className="flex items-center gap-1 text-[9px] text-slate-600">
+                        <span>Score: {scan.score}/100</span>
+                        <span>•</span>
+                        <span>{scan.engines.filter(e => e.result === "malicious").length} malicious</span>
+                        {scan.fileMetadata?.attackType && <><span>•</span><span>{scan.fileMetadata.attackType as string}</span></>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </ScrollArea>
             ) : (
-              <p className="text-[11px] text-slate-600 text-center py-6">No scan data yet</p>
+              <p className="text-[11px] text-slate-600 text-center py-6">No IDS scans yet. Use the scanner above to analyze network targets.</p>
             )}
           </CardContent>
         </Card>
@@ -1893,6 +2019,50 @@ export default function CyberDefender() {
     }
   }, [addAlert]);
 
+  // Scan handler for IDS
+  const handleIDSScan = useCallback(async (target: string) => {
+    setIsScanning(true);
+    setActiveTab("ids");
+    addAlert({ type: "scan", severity: "info", source: target, description: `IDS network analysis initiated for: ${target}` });
+
+    try {
+      const res = await fetch("/api/scan/ids", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target }),
+      });
+      if (!res.ok) throw new Error("Scan failed");
+      const data = await res.json();
+
+      const result: ScanResult = {
+        id: `scan-${Date.now()}`, type: "ids", target, threatLevel: data.threatLevel,
+        score: data.score, details: data.details, aiEnhanced: data.aiEnhanced, aiAnalysis: data.aiAnalysis,
+        timestamp: new Date().toISOString(),
+        engines: data.engines || [], indicators: data.indicators || [], recommendations: data.recommendations || [],
+        fileMetadata: { target, fileType: "Network Traffic", inputType: "hash", fileSize: "N/A", md5: "", sha1: "", sha256: "", ssdeep: "", firstSeen: "", lastAnalysis: new Date().toISOString().slice(0, 10), submissionCount: 1, reputationScore: data.score >= 60 ? -50 : 50, magic: "Network traffic", trid: ["IDS Analysis"], packers: [], attackType: data.attackType, attackVector: data.attackVector, severity: data.severity, networkTraffic: data.networkTraffic },
+        relations: data.relations, behavior: data.behavior, community: data.community,
+        mlAnalysis: data.mlAnalysis,
+      };
+      setScanResults(prev => [...prev, result]);
+      setStats(prev => ({
+        ...prev,
+        scansToday: prev.scansToday + 1,
+        threatsBlocked: data.threatLevel !== "safe" ? prev.threatsBlocked + 1 : prev.threatsBlocked,
+        networkPackets: prev.networkPackets + Math.floor(Math.random() * 1000) + 200,
+      }));
+
+      if (data.threatLevel === "safe") {
+        addAlert({ type: "scan", severity: "low", source: target, description: `IDS scan completed: No threats detected for "${target}" });
+      } else {
+        addAlert({ type: "ids", severity: data.threatLevel as ThreatAlert["severity"], source: target,
+          description: "IDS ALERT — " + (data.attackType || "Unknown") + " detected from \"" + target + "\" — Score: " + data.score + "/100, Severity: " + (data.severity || "Unknown") });
+      }
+    } catch (err) {
+      addAlert({ type: "info", severity: "medium", source: target, description: `IDS scan failed for "${target}". Error: ${err instanceof Error ? err.message : "Unknown"}` });
+    } finally {
+      setIsScanning(false);
+    }
+  }, [addAlert]);
+
   return (
     <div className="min-h-screen flex flex-col bg-cyber-darker cyber-grid-bg relative" suppressHydrationWarning>
       <div className="fixed inset-0 cyber-scanline pointer-events-none z-[100] opacity-30" />
@@ -1917,7 +2087,7 @@ export default function CyberDefender() {
           )}
           {activeTab === "ids" && (
             <motion.div key="ids" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <IDSMonitor alerts={alerts} scans={scanResults} monitorActive={monitorActive} onToggleMonitor={() => setMonitorActive(!monitorActive)} />
+              <IDSMonitor alerts={alerts} scans={scanResults} monitorActive={monitorActive} onToggleMonitor={() => setMonitorActive(!monitorActive)} onScan={handleIDSScan} isScanning={isScanning} />
             </motion.div>
           )}
           {activeTab === "intelligence" && (

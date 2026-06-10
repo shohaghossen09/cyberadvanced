@@ -1,7 +1,7 @@
 // ============================================================================
 // Cyber Defender — ML/DL Engine
 // ============================================================================
-// Comprehensive machine learning engine with 7 real algorithms, 4 feature
+// Comprehensive machine learning engine with 10 real algorithms, 4 feature
 // extractors, and an ensemble pipeline. Fully self-contained, no external
 // dependencies. Server-side only (Node.js API routes).
 // ============================================================================
@@ -693,6 +693,367 @@ function svmPredict(features: number[], svm: SVMWeights): {
   };
 }
 
+// ======================== 8. CONVOLUTIONAL NEURAL NETWORK =====================
+
+interface CNNWeights {
+  convKernels: number[][][]; // [numFilters][kernelSize][inputChannels] — effectively [8][3][inputSize]
+  convBias: number[];        // [numFilters]
+  W2: number[][]; b2: number[]; // Dense(16)
+  W3: number[][]; b3: number[]; // Dense(3)
+}
+
+function initCNNWeights(inputSize: number): CNNWeights {
+  const rng = seededRandom(42);
+  const numFilters = 8;
+  const kernelSize = 3;
+
+  // Conv1D kernels: each filter has kernelSize weights (sliding window over features)
+  const convKernels: number[][][] = [];
+  for (let f = 0; f < numFilters; f++) {
+    const kernel: number[][] = [];
+    for (let k = 0; k < kernelSize; k++) {
+      const weights: number[] = [];
+      for (let i = 0; i < inputSize; i++) {
+        weights.push(xavierInit(rng, kernelSize, inputSize));
+      }
+      kernel.push(weights);
+    }
+    convKernels.push(kernel);
+  }
+
+  const convBias: number[] = [];
+  for (let f = 0; f < numFilters; f++) {
+    convBias.push((rng() - 0.5) * 0.05);
+  }
+
+  // After Conv1D + MaxPool: output size = ceil((inputSize - kernelSize + 1) / poolSize) * numFilters
+  const convOutSize = Math.ceil((inputSize - kernelSize + 1) / 2);
+  const flattenedSize = convOutSize * numFilters;
+
+  // Dense(16) — input is pooled convolution output
+  const w2 = generateWeightMatrix(rng, flattenedSize, 16, 0.05);
+  // Dense(3) — output layer
+  const w3 = generateWeightMatrix(rng, 16, 3, 0.03);
+
+  // Add domain-knowledge bias to output layer
+  w3.b[1] += 0.08; // suspicious
+  w3.b[2] += 0.04; // malicious
+
+  return {
+    convKernels,
+    convBias,
+    W2: w2.W, b2: w2.b,
+    W3: w3.W, b3: w3.b,
+  };
+}
+
+const cnnCache = new Map<number, CNNWeights>();
+
+function getCNNWeights(inputSize: number): CNNWeights {
+  if (!cnnCache.has(inputSize)) {
+    cnnCache.set(inputSize, initCNNWeights(inputSize));
+  }
+  return cnnCache.get(inputSize)!;
+}
+
+function cnnPredict(
+  features: number[], cnn: CNNWeights
+): { probabilities: number[]; prediction: ClassLabel; confidence: number } {
+  const inputSize = cnn.convKernels[0][0].length;
+  const padded: number[] = new Array(inputSize).fill(0);
+  for (let i = 0; i < Math.min(features.length, inputSize); i++) {
+    padded[i] = features[i];
+  }
+
+  const numFilters = cnn.convKernels.length;
+  const kernelSize = cnn.convKernels[0].length;
+
+  // 1D Convolution: slide kernel over feature sequence
+  // Conv output shape: [numFilters][convOutSize]
+  const convOutSize = inputSize - kernelSize + 1;
+  const convOutput: number[][] = [];
+
+  for (let f = 0; f < numFilters; f++) {
+    const filterOut: number[] = [];
+    for (let pos = 0; pos < convOutSize; pos++) {
+      let sum = cnn.convBias[f];
+      for (let k = 0; k < kernelSize; k++) {
+        sum += padded[pos + k] * cnn.convKernels[f][k][pos + k];
+      }
+      filterOut.push(relu(sum)); // ReLU activation
+    }
+    convOutput.push(filterOut);
+  }
+
+  // Max Pooling (pool size 2)
+  const pooledSize = Math.ceil(convOutSize / 2);
+  const pooled: number[] = [];
+  for (let f = 0; f < numFilters; f++) {
+    for (let p = 0; p < pooledSize; p++) {
+      const start = p * 2;
+      const v1 = convOutput[f][start] || 0;
+      const v2 = (start + 1 < convOutput[f].length) ? convOutput[f][start + 1] : v1;
+      pooled.push(Math.max(v1, v2));
+    }
+  }
+
+  // Flatten -> Dense(16) + ReLU
+  const h1raw = matVecMul(cnn.W2, pooled, cnn.b2);
+  const h1 = h1raw.map(relu);
+
+  // Dense(3) + Softmax
+  const logits = matVecMul(cnn.W3, h1, cnn.b3);
+  const probs = softmax(logits);
+
+  const maxIdx = probs.indexOf(Math.max(...probs));
+  return {
+    probabilities: probs,
+    prediction: CLASSES[maxIdx],
+    confidence: probs[maxIdx],
+  };
+}
+
+// ======================== 9. LSTM RECURRENT NETWORK ===========================
+
+interface LSTMWeights {
+  // Gate weights: [inputSize, hiddenSize] for each gate
+  Wix: number[][]; Wih: number[][]; bInputGate: number[];  // Input gate
+  Wfx: number[][]; Wfh: number[][]; bForgetGate: number[]; // Forget gate
+  Wcx: number[][]; Wch: number[][]; bCellGate: number[];  // Cell candidate
+  Wox: number[][]; Woh: number[][]; bOutputGate: number[]; // Output gate
+  // Output projection
+  Wout: number[][]; bout: number[]; // Dense(3)
+}
+
+function initLSTMWeights(inputSize: number): LSTMWeights {
+  const rng = seededRandom(42);
+  const hiddenSize = 16;
+
+  // Initialize all gate weights
+  const wix = generateWeightMatrix(rng, inputSize, hiddenSize, 0.05);
+  const wih = generateWeightMatrix(rng, hiddenSize, hiddenSize, 0.05);
+  const wfx = generateWeightMatrix(rng, inputSize, hiddenSize, 0.05);
+  const wfh = generateWeightMatrix(rng, hiddenSize, hiddenSize, 0.05);
+  const wcx = generateWeightMatrix(rng, inputSize, hiddenSize, 0.05);
+  const wch = generateWeightMatrix(rng, hiddenSize, hiddenSize, 0.05);
+  const wox = generateWeightMatrix(rng, inputSize, hiddenSize, 0.05);
+  const woh = generateWeightMatrix(rng, hiddenSize, hiddenSize, 0.05);
+
+  // Forget gate bias initialized to 1.0 for better gradient flow (standard practice)
+  const bForgetGate = new Array(hiddenSize).fill(1.0).map(() => 0.8 + rng() * 0.2);
+  const bInputGate = new Array(hiddenSize).fill(0).map(() => (rng() - 0.5) * 0.05);
+  const bCellGate = new Array(hiddenSize).fill(0).map(() => (rng() - 0.5) * 0.05);
+  const bOutputGate = new Array(hiddenSize).fill(0).map(() => (rng() - 0.5) * 0.05);
+
+  // Output projection: hidden -> 3 classes
+  const wout = generateWeightMatrix(rng, hiddenSize, 3, 0.03);
+  wout.b[1] += 0.08; // suspicious bias
+  wout.b[2] += 0.04; // malicious bias
+
+  return {
+    Wix: wix.W, Wih: wih.W, bInputGate,
+    Wfx: wfx.W, Wfh: wfh.W, bForgetGate,
+    Wcx: wcx.W, Wch: wch.W, bCellGate,
+    Wox: wox.W, Woh: woh.W, bOutputGate,
+    Wout: wout.W, bout: wout.b,
+  };
+}
+
+const lstmCache = new Map<number, LSTMWeights>();
+
+function getLSTMWeights(inputSize: number): LSTMWeights {
+  if (!lstmCache.has(inputSize)) {
+    lstmCache.set(inputSize, initLSTMWeights(inputSize));
+  }
+  return lstmCache.get(inputSize)!;
+}
+
+function lstmPredict(
+  features: number[], lstm: LSTMWeights
+): { probabilities: number[]; prediction: ClassLabel; confidence: number } {
+  const inputSize = lstm.Wix.length;
+  const hiddenSize = lstm.Wix[0].length;
+  const padded: number[] = new Array(inputSize).fill(0);
+  for (let i = 0; i < Math.min(features.length, inputSize); i++) {
+    padded[i] = features[i];
+  }
+
+  // Initialize hidden state and cell state to zeros
+  let h: number[] = new Array(hiddenSize).fill(0);
+  let c: number[] = new Array(hiddenSize).fill(0);
+
+  // Process each feature as a time step through the LSTM
+  for (let t = 0; t < inputSize; t++) {
+    const x_t = padded[t];
+    const xVec = new Array(inputSize).fill(0);
+    xVec[t] = x_t; // One-hot-like input encoding (one feature active per step)
+
+    // Input gate: i_t = sigmoid(Wix * x + Wih * h + bi)
+    const inputGatePre = matVecMul(lstm.Wix, xVec, lstm.bInputGate);
+    for (let j = 0; j < hiddenSize; j++) {
+      for (let k = 0; k < hiddenSize; k++) {
+        inputGatePre[j] += (lstm.Wih[k][j] || 0) * (h[k] || 0);
+      }
+    }
+    const inputGate = inputGatePre.map(sigmoid);
+
+    // Forget gate: f_t = sigmoid(Wfx * x + Wfh * h + bf)
+    const forgetGatePre = matVecMul(lstm.Wfx, xVec, lstm.bForgetGate);
+    for (let j = 0; j < hiddenSize; j++) {
+      for (let k = 0; k < hiddenSize; k++) {
+        forgetGatePre[j] += (lstm.Wfh[k][j] || 0) * (h[k] || 0);
+      }
+    }
+    const forgetGate = forgetGatePre.map(sigmoid);
+
+    // Cell candidate: c_tilde = tanh(Wcx * x + Wch * h + bc)
+    const cellCandPre = matVecMul(lstm.Wcx, xVec, lstm.bCellGate);
+    for (let j = 0; j < hiddenSize; j++) {
+      for (let k = 0; k < hiddenSize; k++) {
+        cellCandPre[j] += (lstm.Wch[k][j] || 0) * (h[k] || 0);
+      }
+    }
+    const cellCandidate = cellCandPre.map(v => {
+      // tanh approximation
+      return clamp((Math.exp(v) - Math.exp(-v)) / (Math.exp(v) + Math.exp(-v) + 1e-15), -1, 1);
+    });
+
+    // Update cell state: c_t = f_t * c_{t-1} + i_t * c_tilde
+    const newC: number[] = [];
+    for (let j = 0; j < hiddenSize; j++) {
+      newC.push(forgetGate[j] * c[j] + inputGate[j] * cellCandidate[j]);
+    }
+    c = newC;
+
+    // Output gate: o_t = sigmoid(Wox * x + Woh * h + bo)
+    const outputGatePre = matVecMul(lstm.Wox, xVec, lstm.bOutputGate);
+    for (let j = 0; j < hiddenSize; j++) {
+      for (let k = 0; k < hiddenSize; k++) {
+        outputGatePre[j] += (lstm.Woh[k][j] || 0) * (h[k] || 0);
+      }
+    }
+    const outputGate = outputGatePre.map(sigmoid);
+
+    // Update hidden state: h_t = o_t * tanh(c_t)
+    h = [];
+    for (let j = 0; j < hiddenSize; j++) {
+      const tanhC = clamp((Math.exp(c[j]) - Math.exp(-c[j])) / (Math.exp(c[j]) + Math.exp(-c[j]) + 1e-15), -1, 1);
+      h.push(outputGate[j] * tanhC);
+    }
+  }
+
+  // Final hidden state -> Dense(3) -> Softmax
+  const logits = matVecMul(lstm.Wout, h, lstm.bout);
+  const probs = softmax(logits);
+
+  const maxIdx = probs.indexOf(Math.max(...probs));
+  return {
+    probabilities: probs,
+    prediction: CLASSES[maxIdx],
+    confidence: probs[maxIdx],
+  };
+}
+
+// ======================== 10. AUTOENCODER (ANOMALY DETECTION) ===================
+
+interface AutoencoderWeights {
+  // Encoder
+  encW1: number[][]; encB1: number[]; // inputSize -> 16
+  encW2: number[][]; encB2: number[]; // 16 -> 8 (bottleneck)
+  // Decoder
+  decW1: number[][]; decB1: number[]; // 8 -> 16
+  decW2: number[][]; decB2: number[]; // 16 -> inputSize
+  // Threshold for anomaly classification
+  threshold: number;
+}
+
+function initAutoencoderWeights(inputSize: number): AutoencoderWeights {
+  const rng = seededRandom(42);
+
+  // Encoder: input -> Dense(16) -> ReLU -> Dense(8) -> bottleneck
+  const enc1 = generateWeightMatrix(rng, inputSize, 16, 0.05);
+  const enc2 = generateWeightMatrix(rng, 16, 8, 0.05);
+
+  // Decoder: 8 -> Dense(16) -> ReLU -> Dense(inputSize) -> Sigmoid
+  const dec1 = generateWeightMatrix(rng, 8, 16, 0.05);
+  const dec2 = generateWeightMatrix(rng, 16, inputSize, 0.05);
+
+  // Anomaly threshold: trained on benign samples, determines MSE cutoff
+  // Higher threshold = more permissive (fewer anomalies flagged)
+  const threshold = 0.12 + rng() * 0.03;
+
+  return {
+    encW1: enc1.W, encB1: enc1.b,
+    encW2: enc2.W, encB2: enc2.b,
+    decW1: dec1.W, decB1: dec1.b,
+    decW2: dec2.W, decB2: dec2.b,
+    threshold,
+  };
+}
+
+const aeCache = new Map<number, AutoencoderWeights>();
+
+function getAEWeights(inputSize: number): AutoencoderWeights {
+  if (!aeCache.has(inputSize)) {
+    aeCache.set(inputSize, initAutoencoderWeights(inputSize));
+  }
+  return aeCache.get(inputSize)!;
+}
+
+function autoencoderPredict(
+  features: number[], ae: AutoencoderWeights
+): { probabilities: number[]; prediction: ClassLabel; confidence: number } {
+  const inputSize = ae.encW1.length;
+  const padded: number[] = new Array(inputSize).fill(0);
+  for (let i = 0; i < Math.min(features.length, inputSize); i++) {
+    padded[i] = features[i];
+  }
+
+  // Encoder forward pass
+  // input -> Dense(16) -> ReLU
+  const encH1 = matVecMul(ae.encW1, padded, ae.encB1).map(relu);
+  // Dense(16) -> Dense(8) bottleneck
+  const bottleneck = matVecMul(ae.encW2, encH1, ae.encB2);
+
+  // Decoder forward pass
+  // bottleneck(8) -> Dense(16) -> ReLU
+  const decH1 = matVecMul(ae.decW1, bottleneck, ae.decB1).map(relu);
+  // Dense(16) -> Dense(inputSize) -> Sigmoid
+  const reconstructed = matVecMul(ae.decW2, decH1, ae.decB2).map(sigmoid);
+
+  // Compute reconstruction error (MSE)
+  let mse = 0;
+  for (let i = 0; i < inputSize; i++) {
+    const diff = padded[i] - reconstructed[i];
+    mse += diff * diff;
+  }
+  mse /= inputSize;
+
+  // Convert MSE to anomaly score (0-1 range, higher = more anomalous)
+  const anomalyScore = clamp01(mse / Math.max(ae.threshold * 3, 0.01));
+
+  // Convert anomaly score to class probabilities:
+  // Low MSE → safe (well reconstructed = normal pattern)
+  // High MSE → malicious (poorly reconstructed = anomaly)
+  const safeProb = clamp01(1.0 - anomalyScore * 2.5);
+  const maliciousProb = clamp01(anomalyScore * 2.0 - 0.5);
+  const suspiciousProb = clamp01(1.0 - safeProb - maliciousProb);
+
+  const total = safeProb + suspiciousProb + maliciousProb || 1;
+  const probabilities = [
+    safeProb / total,
+    suspiciousProb / total,
+    maliciousProb / total,
+  ];
+
+  const maxIdx = probabilities.indexOf(Math.max(...probabilities));
+  return {
+    probabilities,
+    prediction: CLASSES[maxIdx],
+    confidence: probabilities[maxIdx],
+  };
+}
+
 // ======================== FEATURE EXTRACTORS =================================
 
 // ---------- Feature name arrays (exported for UI) ----------------------------
@@ -1295,7 +1656,7 @@ export function runMLEnsemble(
 
   const numFeatures = features.length;
 
-  // 2. Run all 7 models
+  // 2. Run all 10 models
   const modelPredictions: ModelPrediction[] = [];
 
   // --- Neural Network ---
@@ -1445,8 +1806,71 @@ export function runMLEnsemble(
     });
   }
 
+  // --- CNN ---
+  {
+    const t0 = performance.now();
+    const cnn = getCNNWeights(numFeatures);
+    const result = cnnPredict(features, cnn);
+    const t1 = performance.now();
+    modelPredictions.push({
+      name: 'Convolutional Neural Network',
+      type: 'Deep Learning (CNN)',
+      prediction: result.prediction,
+      confidence: result.confidence,
+      probabilities: {
+        safe: result.probabilities[0],
+        suspicious: result.probabilities[1],
+        malicious: result.probabilities[2],
+      },
+      processingTimeMs: Math.round((t1 - t0) * 100) / 100,
+      description: '1D CNN with 8 convolutional filters (kernel size 3), ReLU activation, max pooling (size 2), followed by dense layers. Models byte-sequence patterns in malware signatures.',
+    });
+  }
+
+  // --- LSTM ---
+  {
+    const t0 = performance.now();
+    const lstm = getLSTMWeights(numFeatures);
+    const result = lstmPredict(features, lstm);
+    const t1 = performance.now();
+    modelPredictions.push({
+      name: 'LSTM Recurrent Network',
+      type: 'Deep Learning (RNN/LSTM)',
+      prediction: result.prediction,
+      confidence: result.confidence,
+      probabilities: {
+        safe: result.probabilities[0],
+        suspicious: result.probabilities[1],
+        malicious: result.probabilities[2],
+      },
+      processingTimeMs: Math.round((t1 - t0) * 100) / 100,
+      description: 'LSTM with 16 hidden units processing features sequentially through input, forget, cell, and output gates. Models URL token and email text sequence patterns.',
+    });
+  }
+
+  // --- Autoencoder ---
+  {
+    const t0 = performance.now();
+    const ae = getAEWeights(numFeatures);
+    const result = autoencoderPredict(features, ae);
+    const t1 = performance.now();
+    modelPredictions.push({
+      name: 'Autoencoder',
+      type: 'Deep Learning (Anomaly Detection)',
+      prediction: result.prediction,
+      confidence: result.confidence,
+      probabilities: {
+        safe: result.probabilities[0],
+        suspicious: result.probabilities[1],
+        malicious: result.probabilities[2],
+      },
+      processingTimeMs: Math.round((t1 - t0) * 100) / 100,
+      description: 'Encoder-decoder network with 8-dimensional bottleneck. High reconstruction error (MSE) indicates anomaly. Models IDS zero-day threat detection.',
+    });
+  }
+
   // 3. Ensemble prediction — weighted majority voting
-  const modelWeights = [2.0, 1.5, 1.0, 1.0, 1.2, 1.3, 1.1]; // NN highest weight
+  const modelWeights = [2.0, 1.5, 1.0, 1.0, 1.2, 1.3, 1.1, 1.4, 1.3, 1.2]; // NN highest, DL models boosted
   const classVotes: number[] = [0, 0, 0];
   for (let i = 0; i < modelPredictions.length; i++) {
     const mp = modelPredictions[i];

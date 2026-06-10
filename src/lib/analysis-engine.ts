@@ -1702,3 +1702,483 @@ function generatePhishingDetails(
 
   return `Analysis of ${targetDesc} shows NO significant phishing indicators. The sample was evaluated by ${engines.length} detection engines with ${maliciousCount} malicious classifications and ${suspiciousCount} suspicious flags. Threat score: ${score}/100 (SAFE).\n\n${mode === "url" ? "The URL structure, domain reputation, and SSL configuration do not exhibit known phishing patterns." : "The email content does not contain typical phishing indicators such as social engineering tactics, urgency language, or suspicious link patterns."} Community feedback and threat intelligence data show no evidence of phishing activity.\n\nThis ${mode === "url" ? "URL" : "email"} can be considered safe with standard security precautions.`;
 }
+
+// ======================== IDS ANALYSIS ===================================
+
+// Network traffic entry type
+export interface NetworkTrafficEntry {
+  protocol: string;
+  srcIP: string;
+  dstIP: string;
+  srcPort: number;
+  dstPort: number;
+  packets: number;
+  bytes: number;
+}
+
+export interface IDSAnalysisResult {
+  score: number;
+  threatLevel: ThreatLevel;
+  attackType: string;
+  details: string;
+  engines: EngineResult[];
+  indicators: string[];
+  recommendations: string[];
+  relations: Relations;
+  behavior: Behavior;
+  community: CommunityData;
+  networkTraffic: NetworkTrafficEntry[];
+  attackVector: string;
+  severity: string;
+}
+
+// ======================== IDS ENGINE DEFINITIONS =============================
+
+const IDS_ENGINES: { name: string; version: string; method: EngineMethod }[] = [
+  { name: "CyberDefender AI", version: "v3.2", method: "ml" },
+  { name: "Snort IDS", version: "v3.1.41", method: "signature" },
+  { name: "Suricata", version: "v7.0.4", method: "signature" },
+  { name: "Zeek (Bro)", version: "v6.2.0", method: "behavior" },
+  { name: "Sigma Rules", version: "v2.3", method: "heuristic" },
+  { name: "OSSEC HIDS", version: "v3.6.0", method: "behavior" },
+  { name: "CrowdStrike Falcon", version: "v6.54", method: "ml" },
+  { name: "Fail2Ban", version: "v1.0.2", method: "behavior" },
+  { name: "ModSecurity WAF", version: "v3.3.5", method: "signature" },
+  { name: "OpenVAS", version: "v22.7.0", method: "heuristic" },
+  { name: "Nessus", version: "v10.7.0", method: "signature" },
+  { name: "Security Onion", version: "v3.4.0", method: "behavior" },
+  { name: "Wazuh SIEM", version: "v4.8.0", method: "ml" },
+  { name: "Sagan IDS", version: "v1.3.0", method: "signature" },
+  { name: "PFSense Suricata", version: "v2.7.2", method: "signature" },
+  { name: "Dragos OT IDS", version: "v5.0", method: "ml" },
+  { name: "Darktrace AI", version: "v7.1", method: "ml" },
+  { name: "Vectra CDR", version: "v6.3", method: "behavior" },
+  { name: "Corelight Zeek", version: "v5.3", method: "behavior" },
+  { name: "GRR Rapid Response", version: "v3.4.5", method: "heuristic" },
+  { name: "Tcpdump Analysis", version: "v4.9.3", method: "behavior" },
+];
+
+// ======================== IDS DETECTION DATABASES =========================
+
+const IDS_ATTACK_TYPES: Record<string, string[]> = {
+  high: [
+    "Port Scan", "DDoS", "SQL Injection", "Brute Force", "DNS Tunneling",
+    "XSS Attack", "Command Injection", "Data Exfiltration",
+  ],
+  medium: [
+    "Reconnaissance", "Brute Force", "XSS Attack", "SQL Injection",
+    "DNS Tunneling", "Data Exfiltration",
+  ],
+  low: [
+    "Reconnaissance", "Benign Traffic",
+  ],
+};
+
+const IDS_DETECTON_NAMES: Record<string, string[]> = {
+  high: [
+    "ET SCAN Nmap TCP", "ET DOS Active Scan", "GPL ATTACK_RESPONSE",
+    "ET TROJAN Generic", "SID Attacker Detected", "Sigma Win Malicious",
+    "CrowdStrike IOC Match", "Suricata ALERT", "Zeek Suspicious Activity",
+    "Wazuh Correlation", "ModSecurity OWASP", "Darktrace Anomaly",
+    "IDS Port Sweep", "IDS SYN Flood", "IDS Brute Force",
+    "IDS SQLi Detected", "IDS XSS Payload", "IDS Command Injection",
+    "IDS Exfil Detected", "IDS DNS Tunnel",
+  ],
+  medium: [
+    "ET POLICY Suspicious", "GPL MISC Suspicious", "IDS Suspicious Pattern",
+    "IDS Unusual Traffic", "IDS Anomalous Behavior", "IDS Failed Login",
+    "IDS Rate Limit", "IDS Protocol Anomaly",
+  ],
+  low: [
+    "IDS Generic Noise", "IDS Background Traffic",
+  ],
+};
+
+const IDS_ATTACK_VECTORS: Record<string, string[]> = {
+  high: [
+    "Network Reconnaissance", "External Exploitation", "Insider Threat",
+    "Botnet Command & Control", "Advanced Persistent Threat",
+  ],
+  medium: [
+    "Unauthorized Access Attempt", "Web Application Attack", "Protocol Exploitation",
+  ],
+  low: [
+    "Routine Network Activity", "Legitimate Traffic",
+  ],
+};
+
+const IDS_SEVERITIES: Record<string, string[]> = {
+  critical: ["CRITICAL"],
+  high: ["HIGH"],
+  medium: ["MEDIUM"],
+  low: ["LOW"],
+  safe: ["INFO"],
+};
+
+// ======================== IDS INPUT DETECTION =================================
+
+type IDSInputType = "ipv4" | "ipv6" | "domain" | "port_scan" | "network_pattern";
+
+function detectIDSInputType(target: string): IDSInputType {
+  const t = target.trim();
+  // IPv6
+  if (/^[0-9a-fA-F:]+$/i.test(t) && t.includes(":") && (t.match(/:/g) || []).length >= 4) {
+    return "ipv6";
+  }
+  // IPv4
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(t)) {
+    return "ipv4";
+  }
+  // Port scan pattern (e.g., 192.168.1.1:80,443,8080 or comma-separated ports)
+  if (/:\d{1,5}(,\d+)+$/.test(t) || /:\d{1,5}-\d{1,5}$/.test(t)) {
+    return "port_scan";
+  }
+  // Domain (simple heuristic: contains letters and dots, no spaces, no slashes)
+  if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}$/.test(t)) {
+    return "domain";
+  }
+  // Default
+  return "network_pattern";
+}
+
+// ======================== IDS ANALYSIS FUNCTION =============================
+
+/** Main IDS analysis function */
+export function analyzeIDS(target: string): IDSAnalysisResult {
+  const rng = createRNG(hashString(target + "_IDS"));
+  const inputType = detectIDSInputType(target);
+  const t = target.trim();
+  const lower = t.toLowerCase();
+
+  // ----- Score computation based on input type -----
+  let score = 0;
+  const tags: string[] = [];
+  const extraIndicators: string[] = [];
+
+  if (inputType === "ipv4") {
+    // Analyze IPv4 address characteristics
+    const parts = t.split(".").map(Number);
+    // Private / reserved ranges
+    if (parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168)) {
+      score = 5;
+      tags.push("private-ip", "internal-traffic");
+      extraIndicators.push("Private/internal IP address detected — typically safe");
+    } else if (parts[0] === 0 || parts[0] === 127 || parts[0] >= 224) {
+      score = 12;
+      tags.push("reserved-ip");
+      extraIndicators.push("Reserved or multicast IP range");
+    } else {
+      score = 15;
+      // Check if it matches known bad patterns (deterministic via hash)
+      const hashVal = hashString(target);
+      score += (hashVal & 0x7F); // Add 0-127
+    }
+  } else if (inputType === "ipv6") {
+    score = 15;
+    const hashVal = hashString(target);
+    score += (hashVal & 0x7F);
+    tags.push("ipv6-address");
+  } else if (inputType === "domain") {
+    score = 10;
+    // Check suspicious TLD
+    for (const tld of SUSPICIOUS_TLDS) {
+      if (lower.includes(tld)) {
+        score += 15;
+        tags.push("suspicious-tld");
+        extraIndicators.push(`Domain uses suspicious TLD: ${tld}`);
+        break;
+      }
+    }
+    // Check brand impersonation
+    for (const brand of BRAND_NAMES) {
+      if (lower.includes(brand) && !lower.endsWith(`${brand}.com`) && !lower.endsWith(`${brand}.org`)) {
+        score += 25;
+        tags.push("brand-impersonation");
+        extraIndicators.push(`Potential brand impersonation: ${brand}`);
+        break;
+      }
+    }
+    // Long subdomain chains
+    const dotCount = (t.match(/\./g) || []).length;
+    if (dotCount > 4) {
+      score += 10;
+      tags.push("excessive-subdomains");
+    }
+    // Check for common C2-related patterns
+    if (/cdn|api|static|update|download|gate|relay|proxy|node/i.test(lower)) {
+      score += 5;
+    }
+    const hashVal = hashString(target);
+    score += (hashVal & 0x3F); // Add 0-63
+  } else if (inputType === "port_scan") {
+    score = 55;
+    tags.push("port-scan-pattern", "reconnaissance");
+    extraIndicators.push("Port scan pattern detected in input");
+    const ports = t.split(/[,:-]/);
+    const portCount = ports.length;
+    if (portCount > 10) {
+      score += 20;
+      extraIndicators.push(`Large number of ports scanned: ${portCount}`);
+    }
+    // Check for well-known sensitive ports
+    const sensitivePorts = [22, 23, 25, 53, 80, 443, 445, 1433, 3306, 3389, 5432, 8080, 8443, 27017];
+    const matchingSensitive = ports.map(p => parseInt(p)).filter(p => sensitivePorts.includes(p));
+    if (matchingSensitive.length > 3) {
+      score += 15;
+      extraIndicators.push(`Sensitive ports targeted: ${matchingSensitive.join(", ")}`);
+    }
+  } else {
+    // Generic network pattern — analyze content
+    score = 10;
+    const hasHTTP = /http|get|post|host/i.test(t);
+    const hasDNS = /dns|resolve|query|nslookup/i.test(t);
+    const hasSQL = /select|insert|update|delete|union|drop|alter|exec(ute)?/i.test(t);
+    const hasCmd = /cmd|powershell|bash|sh\s|eval|system/i.test(t);
+    const hasXSS = /<script|javascript:|onerror|onload|alert\(|document\./i.test(t);
+    const hasICMP = /ping|icmp|traceroute/i.test(t);
+
+    if (hasSQL) { score += 30; tags.push("sql-injection-indicator"); extraIndicators.push("SQL injection patterns detected in input"); }
+    if (hasXSS) { score += 25; tags.push("xss-indicator"); extraIndicators.push("XSS attack patterns detected in input"); }
+    if (hasCmd) { score += 25; tags.push("command-injection-indicator"); extraIndicators.push("Command injection patterns detected"); }
+    if (hasICMP) { score += 10; tags.push("icmp-activity"); }
+    if (hasDNS) { score += 5; tags.push("dns-activity"); }
+    if (hasHTTP) { score += 5; tags.push("http-traffic"); }
+
+    // Port pattern detection in generic input
+    if (/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(t)) {
+      score += 10;
+      tags.push("ip-address-detected");
+    }
+    if (/:\d{4,5}\b/.test(t)) {
+      score += 8;
+      tags.push("port-in-input");
+    }
+
+    // Hash-based deterministic component
+    const hashVal = hashString(target);
+    score += (hashVal & 0x3F);
+  }
+
+  // Clamp score
+  score = Math.max(0, Math.min(100, score));
+
+  // Small deterministic jitter
+  score = Math.max(0, Math.min(100, Math.round(score + (rng() * 8 - 4))));
+  const threatLevel = scoreToThreatLevel(score);
+
+  // ----- Determine attack type -----
+  let attackPool: string[];
+  if (inputType === "port_scan") {
+    attackPool = ["Port Scan", "Reconnaissance", "DDoS"];
+  } else if (tags.includes("sql-injection-indicator")) {
+    attackPool = ["SQL Injection", "XSS Attack", "Command Injection"];
+  } else if (tags.includes("xss-indicator")) {
+    attackPool = ["XSS Attack", "SQL Injection", "Command Injection"];
+  } else if (tags.includes("command-injection-indicator")) {
+    attackPool = ["Command Injection", "SQL Injection", "Brute Force"];
+  } else if (tags.includes("brand-impersonation")) {
+    attackPool = ["DNS Tunneling", "Reconnaissance", "Data Exfiltration"];
+  } else if (score >= 60) {
+    attackPool = IDS_ATTACK_TYPES.high;
+  } else if (score >= 30) {
+    attackPool = IDS_ATTACK_TYPES.medium;
+  } else {
+    attackPool = IDS_ATTACK_TYPES.low;
+  }
+  const attackType = pickItems(rng, attackPool, 1)[0];
+
+  // ----- Determine severity -----
+  const severityPool = score >= 80 ? IDS_SEVERITIES.critical : score >= 60 ? IDS_SEVERITIES.high : score >= 40 ? IDS_SEVERITIES.medium : score >= 20 ? IDS_SEVERITIES.low : IDS_SEVERITIES.safe;
+  const severity = severityPool[0];
+
+  // ----- Determine attack vector -----
+  const vectorPool = score >= 60 ? IDS_ATTACK_VECTORS.high : score >= 30 ? IDS_ATTACK_VECTORS.medium : IDS_ATTACK_VECTORS.low;
+  const attackVector = pickItems(rng, vectorPool, 1)[0];
+
+  // ----- Detection names -----
+  const detectionPool = score >= 60 ? IDS_DETECTON_NAMES.high : score >= 30 ? IDS_DETECTON_NAMES.medium : IDS_DETECTON_NAMES.low;
+  const detectionNames = pickItems(rng, detectionPool, 4 + Math.floor(rng() * 4));
+
+  // ----- Engine results -----
+  const engines = generateEngineResults(rng, IDS_ENGINES, score, detectionNames);
+  const maliciousCount = engines.filter(e => e.result === "malicious").length;
+
+  // ----- Indicators -----
+  const baseIndicators: string[] = [...extraIndicators];
+  if (maliciousCount > 0) baseIndicators.push(`${maliciousCount}/${engines.length} IDS engines triggered alerts`);
+  if (score >= 80) baseIndicators.push("CRITICAL — Active intrusion detected, immediate response required");
+  if (score >= 60) baseIndicators.push("HIGH — Multiple IDS engines flagged malicious activity");
+  if (score >= 40) baseIndicators.push("MEDIUM — Suspicious network behavior detected");
+  if (tags.includes("port-scan-pattern")) baseIndicators.push("Port scan reconnaissance activity identified");
+  if (tags.includes("sql-injection-indicator")) baseIndicators.push("SQL injection attack signature matched");
+  if (tags.includes("xss-indicator")) baseIndicators.push("Cross-site scripting (XSS) payload detected");
+  if (tags.includes("command-injection-indicator")) baseIndicators.push("OS command injection attempt detected");
+  if (tags.includes("brand-impersonation")) baseIndicators.push("Domain mimicking legitimate brand");
+  if (tags.includes("suspicious-tld")) baseIndicators.push("Domain hosted on suspicious TLD");
+  if (tags.includes("private-ip")) baseIndicators.push("Traffic originates from private IP space");
+  if (tags.length === 0 && score < 20) baseIndicators.push("No threat indicators detected — traffic appears benign");
+
+  // ----- Recommendations -----
+  const recommendations: string[] = [];
+  if (score >= 80) {
+    recommendations.push("Immediately isolate the affected host/network segment");
+    recommendations.push("Activate incident response procedures and escalate to SOC team");
+    recommendations.push("Block source IP/domain in firewall and IDS rules");
+    recommendations.push("Capture forensic data including full packet capture for analysis");
+  } else if (score >= 60) {
+    recommendations.push("Investigate the source immediately and correlate with SIEM data");
+    recommendations.push("Update firewall rules to block suspicious traffic patterns");
+    recommendations.push("Monitor affected systems for lateral movement indicators");
+  } else if (score >= 40) {
+    recommendations.push("Log the event for further investigation and correlation");
+    recommendations.push("Review firewall and IDS rule sets for coverage gaps");
+    recommendations.push("Monitor the target for additional suspicious activity");
+  } else if (score >= 20) {
+    recommendations.push("Continue monitoring the target with standard alerting");
+    recommendations.push("Review and update IDS signatures periodically");
+  } else {
+    recommendations.push("No action required — traffic within normal parameters");
+    recommendations.push("Continue routine network monitoring");
+  }
+
+  // ----- Relations -----
+  const numRelations = score >= 60 ? 5 : score >= 30 ? 3 : 1;
+  const relations: Relations = {
+    contactedDomains: pickItems(rng, BRAND_NAMES.map(b => generateDomain(rng, true)), numRelations),
+    contactedIPs: Array.from({ length: numRelations }, () => generateIPv4(rng)),
+    contactedURLs: Array.from({ length: Math.min(numRelations, 3) }, () =>
+      `http://${generateDomain(rng, true)}/` + hexFromRNG(rng, 8)
+    ),
+    downloadedFiles: score >= 50 ? Array.from({ length: Math.floor(rng() * 3) + 1 }, () =>
+      `${hexFromRNG(rng, 8)}.${pickItems(rng, ["exe", "dll", "bin", "dat", "sh"], 1)[0]}`
+    ) : [],
+    executingFiles: score >= 70 ? Array.from({ length: Math.floor(rng() * 2) + 1 }, () =>
+      `/tmp/${hexFromRNG(rng, 8)}`
+    ) : [],
+    similarFiles: Array.from({ length: Math.floor(rng() * 3) }, () => generateHash(rng, 256)),
+  };
+
+  // ----- Behavior -----
+  const behaviorCount = score >= 70 ? 6 : score >= 40 ? 3 : score >= 20 ? 1 : 0;
+  const behavior: Behavior = {
+    network: score >= 20 ? Array.from({ length: Math.min(behaviorCount + 1, 5) }, () => ({
+      action: pickItems(rng, ["connection", "dns_query", "http_request", "syn_scan", "udp_send", "icmp_ping"], 1)[0],
+      destination: inputType === "ipv4" ? generateDomain(rng, true) : inputType === "ipv6" ? generateIPv6(rng) : generateDomain(rng, true),
+      port: pickItems(rng, [22, 80, 443, 445, 3389, 8080, 8443, 53, 25, 587, 1433, 3306, 5432, 27017], 1)[0],
+      protocol: pickItems(rng, ["TCP", "UDP", "DNS", "HTTP", "HTTPS", "ICMP"], 1)[0],
+    })) : [],
+    filesystem: score >= 50 ? Array.from({ length: Math.min(behaviorCount, 3) }, () => ({
+      action: pickItems(rng, ["write", "read", "delete", "create", "modify"], 1)[0],
+      target: `/var/log/${pickItems(rng, ["auth.log", "syslog", "kern.log", "daemon.log", "security"], 1)[0]}`,
+      description: pickItems(rng, [
+        "Modified system log file",
+        "Accessed authentication logs",
+        "Cleared log entries detected",
+        "Created new log file",
+      ], 1)[0],
+    })) : [],
+    registry: score >= 50 ? Array.from({ length: Math.min(behaviorCount, 3) }, () => ({
+      action: pickItems(rng, ["set", "add", "delete", "modify"], 1)[0],
+      key: `/etc/${pickItems(rng, ["passwd", "shadow", "sudoers", "crontab", "hosts"], 1)[0]}`,
+      description: pickItems(rng, [
+        "Modified authentication configuration",
+        "Added persistence mechanism",
+        "Altered access control settings",
+      ], 1)[0],
+    })) : [],
+    process: score >= 40 ? Array.from({ length: Math.min(behaviorCount, 3) }, () => ({
+      action: pickItems(rng, ["spawn", "inject", "terminate", "privilege_escalate", "exploit"], 1)[0],
+      process: pickItems(rng, ["sshd", "nginx", "apache2", "python3", "bash", "sh", "cron", "systemd", "docker", "kworker"], 1)[0],
+      description: pickItems(rng, [
+        "Spawned suspicious process",
+        "Attempted privilege escalation",
+        "Process injection detected",
+      ], 1)[0],
+    })) : [],
+  };
+
+  // ----- Community data -----
+  const communityVotes = score >= 60 ? Math.floor(rng() * 80) + 20 : Math.floor(rng() * 10) + 1;
+  const community: CommunityData = {
+    votes: { harmless: 100 - communityVotes, malicious: communityVotes },
+    comments: Array.from({ length: Math.floor(rng() * 4) + 1 }, () => ({
+      date: generateDate(rng, 30).slice(0, 10),
+      user: generateUsername(rng),
+      text: pickItems(rng, [
+        "Confirmed malicious activity from this source",
+        "Traffic matched known attack signatures in our environment",
+        "False positive — legitimate penetration testing activity",
+        "This IP was flagged in our threat feed",
+        "Observed similar patterns during recent incident",
+        "Correlated with multiple attack campaigns",
+        "Investigated — no malicious intent found",
+        "Monitoring this source for further activity",
+      ], 1)[0],
+      verdict: score >= 50 ? "malicious" : "harmless",
+    })),
+    popularityRank: Math.floor(rng() * 100000) + 1,
+    totalVotes: 100,
+    communityScore: Math.max(-100, Math.min(100, Math.round(score - 50 + (rng() * 10 - 5)))),
+  };
+
+  // ----- Network traffic -----
+  const numTrafficEntries = Math.max(2, Math.min(8, Math.floor(rng() * 6) + 3));
+  const protocols = ["TCP", "UDP", "DNS", "HTTP", "HTTPS", "ICMP"];
+  const ports = [22, 80, 443, 445, 3389, 8080, 8443, 53, 25, 587, 1433, 3306, 5432, 27017];
+
+  let srcBaseIP: string;
+  let dstBaseIP: string;
+  if (inputType === "ipv4") {
+    srcBaseIP = t;
+  } else if (inputType === "ipv6") {
+    srcBaseIP = generateIPv4(rng);
+  } else {
+    srcBaseIP = generateIPv4(rng);
+  }
+  dstBaseIP = generateIPv4(rng);
+
+  const networkTraffic: NetworkTrafficEntry[] = Array.from({ length: numTrafficEntries }, () => {
+    const protocol = protocols[Math.floor(rng() * protocols.length)];
+    return {
+      protocol,
+      srcIP: inputType === "ipv6" ? generateIPv6(rng) : (rng() > 0.3 ? srcBaseIP : generateIPv4(rng)),
+      dstIP: dstBaseIP,
+      srcPort: pickItems(rng, ports, 1)[0],
+      dstPort: pickItems(rng, ports, 1)[0],
+      packets: Math.floor(rng() * 200) + 1,
+      bytes: Math.floor(rng() * 50000) + 100,
+    };
+  });
+
+  // ----- Details generation -----
+  const targetDesc = inputType === "ipv4" ? `IP address ${t}` :
+    inputType === "ipv6" ? `IPv6 address ${t}` :
+    inputType === "domain" ? `domain ${t}` :
+    inputType === "port_scan" ? `port scan target ${t}` : `network target "${t.slice(0, 100)}"`;
+
+  const details = score >= 80
+    ? `CRITICAL threat detected for ${targetDesc}. The IDS analysis engine cluster generated a threat score of ${score}/100 across ${engines.length} detection engines with ${maliciousCount} malicious classifications. Attack type: ${attackType}. Attack vector: ${attackVector}.\n\nMultiple high-confidence indicators suggest an active intrusion attempt. Network traffic analysis reveals anomalous patterns consistent with ${attackType.toLowerCase()} activity. ${extraIndicators.length > 0 ? `Key indicators: ${extraIndicators.slice(0, 3).join("; ")}.` : ""} Immediate containment and forensic investigation are required.`
+    : score >= 60
+    ? `HIGH threat level detected for ${targetDesc}. The IDS analysis scored ${score}/100 with ${maliciousCount} out of ${engines.length} engines flagging malicious activity. Attack classification: ${attackType} via ${attackVector}.\n\nNetwork behavior analysis identified patterns consistent with known attack signatures. The target exhibits characteristics of ${attackType.toLowerCase()} with moderate-to-high confidence. ${extraIndicators.length > 0 ? `Primary indicators: ${extraIndicators.slice(0, 3).join("; ")}.` : ""} Recommended immediate investigation and potential firewall rule updates.`
+    : score >= 40
+    ? `MEDIUM risk analysis of ${targetDesc}. The IDS evaluation returned a score of ${score}/100 with ${maliciousCount} malicious and ${engines.filter(e => e.result === "suspicious").length} suspicious engine detections across ${engines.length} IDS engines. Potential attack type: ${attackType}.\n\n${extraIndicators.length > 0 ? `Suspicious indicators include: ${extraIndicators.slice(0, 3).join("; ")}.` : "Some anomalous patterns were detected during network traffic analysis."} While not confirmed malicious, this activity warrants further monitoring and correlation with other security events.`
+    : score >= 20
+    ? `LOW risk analysis of ${targetDesc}. The IDS scan returned a score of ${score}/100 with ${maliciousCount} malicious classifications from ${engines.length} engines. ${extraIndicators.length > 0 ? `Minor indicators: ${extraIndicators.slice(0, 2).join("; ")}.` : "No significant malicious patterns were identified."} The traffic pattern shows some characteristics that may warrant continued observation but does not meet thresholds for confirmed threats.`
+    : `Analysis of ${targetDesc} shows NO significant intrusion indicators. The IDS evaluation scored ${score}/100 (SAFE) across ${engines.length} detection engines with ${maliciousCount} malicious classifications. Network traffic patterns are within normal operational parameters. ${inputType === "ipv4" ? "The IP address belongs to routine traffic." : ""} No attack signatures, anomalies, or policy violations were detected. Continued standard monitoring is sufficient.`;
+
+  return {
+    score,
+    threatLevel,
+    attackType,
+    details,
+    engines,
+    indicators: baseIndicators,
+    recommendations,
+    relations,
+    behavior,
+    community,
+    networkTraffic,
+    attackVector,
+    severity,
+  };
+}

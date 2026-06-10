@@ -1,0 +1,154 @@
+import { NextRequest, NextResponse } from "next/server";
+import { analyzeIDS } from "@/lib/analysis-engine";
+import { runMLEnsemble } from "@/lib/ml-engine";
+
+const AI_TIMEOUT = 10000;
+const SEARCH_TIMEOUT = 12000;
+
+interface WebIntelData {
+  query: string;
+  snippets: string[];
+  sources: { title: string; url: string }[];
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
+async function tryGetZAI() {
+  try {
+    const ZAI = (await import("z-ai-web-dev-sdk")).default;
+    const zai = await withTimeout(ZAI.create(), AI_TIMEOUT);
+    return zai || null;
+  } catch {
+    return null;
+  }
+}
+
+async function searchWebIntel(
+  zai: Awaited<ReturnType<typeof tryGetZAI>>,
+  query: string,
+): Promise<WebIntelData | null> {
+  if (!zai) return null;
+  try {
+    const results = await withTimeout(
+      zai.functions.invoke("web_search", { query, num: 5 }),
+      SEARCH_TIMEOUT
+    );
+    if (results && Array.isArray(results) && results.length > 0) {
+      return {
+        query,
+        snippets: results.slice(0, 3).map((r: { snippet?: string }) => r.snippet || "").filter(Boolean),
+        sources: results.slice(0, 3).map((r: { name?: string; url?: string }) => ({
+          title: r.name || "",
+          url: r.url || "",
+        })),
+      };
+    }
+  } catch {
+    // Web search unavailable
+  }
+  return null;
+}
+
+async function getAIAnalysis(
+  zai: Awaited<ReturnType<typeof tryGetZAI>>,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  if (!zai) return "";
+  try {
+    const completion = await withTimeout(
+      zai.chat.completions.create({
+        messages: [
+          { role: "assistant", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        thinking: { type: "disabled" },
+      }),
+      AI_TIMEOUT
+    );
+    return completion?.choices?.[0]?.message?.content || "";
+  } catch {
+    return "";
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { target } = await request.json();
+    if (!target || typeof target !== "string" || target.trim().length === 0) {
+      return NextResponse.json({ error: "Target is required" }, { status: 400 });
+    }
+
+    // 1. Run heuristic analysis AND ML analysis in parallel
+    const [baseResult, mlResult] = await Promise.all([
+      Promise.resolve(analyzeIDS(target)),
+      Promise.resolve(runMLEnsemble(target, "ids")),
+    ]);
+
+    // 2. Get ZAI instance
+    const zai = await tryGetZAI();
+
+    // 3. Build search query from target
+    const searchQuery = `IDS intrusion detection threat intelligence "${target.slice(0, 80)}" attack analysis`;
+
+    // 4. Parallel: AI analysis + Web search (include ML results in prompt)
+    const [aiDetails, webIntel] = await Promise.all([
+      getAIAnalysis(
+        zai,
+        "You are a senior cybersecurity analyst specializing in intrusion detection systems (IDS) and network traffic analysis. Provide a detailed (4-6 sentence) threat analysis report. Include specific attack type classification, network-level indicators, potential impact assessment, and recommended containment actions. Use professional IDS/network security terminology.",
+        `Analyze this network target for intrusion detection threats:\n\nTarget: "${target.slice(0, 500)}"\nThreat Score: ${baseResult.score}/100\nAttack Type: ${baseResult.attackType}\nAttack Vector: ${baseResult.attackVector}\nSeverity: ${baseResult.severity}\nDetection Rate: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length} IDS engines\n\nML/DL ENSEMBLE RESULTS:\n- ML Score: ${mlResult.ensembleScore}/100\n- ML Prediction: ${mlResult.ensemblePrediction}\n- ML Confidence: ${(mlResult.ensembleConfidence * 100).toFixed(1)}%\n- Models Used: ${mlResult.models.map(m => `${m.name}(${m.prediction}:${(m.confidence * 100).toFixed(0)}%)`).join(", ")}\n- Top Features: ${mlResult.featureImportance.slice(0, 5).map(f => `${f.feature}(${(f.importance * 100).toFixed(0)}%)`).join(", ")}\n- Processing Time: ${mlResult.processingTimeMs}ms`
+      ),
+      searchWebIntel(zai, searchQuery),
+    ]);
+
+    // 5. If we have both AI and web intel, synthesize them
+    let enrichedAnalysis = aiDetails || baseResult.details;
+    if (webIntel && webIntel.snippets.length > 0 && zai) {
+      const intelContext = webIntel.snippets.join("\n");
+      const sourceList = webIntel.sources.map((s) => `• ${s.title} (${s.url})`).join("\n");
+      const synthesized = await getAIAnalysis(
+        zai,
+        "You are a threat intelligence analyst specializing in network intrusion detection. Synthesize heuristic IDS scan results with real-time web intelligence and ML model analysis into a comprehensive IDS threat report (3-5 sentences).",
+        `TARGET: "${target.slice(0, 200)}"\n\nHEURISTIC IDS RESULTS:\n- Threat Score: ${baseResult.score}/100\n- Attack Type: ${baseResult.attackType}\n- Attack Vector: ${baseResult.attackVector}\n- Severity: ${baseResult.severity}\n- Detections: ${baseResult.engines.filter((e) => e.result === "malicious").length}/${baseResult.engines.length}\n\nML/DL ENSEMBLE:\n- Prediction: ${mlResult.ensemblePrediction} (${(mlResult.ensembleConfidence * 100).toFixed(1)}%)\n- 7 Models: ${mlResult.models.map(m => m.name).join(", ")}\n\nREAL-TIME WEB INTELLIGENCE:\n${intelContext}\n\nSOURCES:\n${sourceList}`
+      );
+      if (synthesized) enrichedAnalysis = synthesized;
+    }
+
+    const aiEnhanced = !!(aiDetails || webIntel || mlResult);
+
+    // 6. Enrich community data with web sources
+    const enrichedCommunity = { ...baseResult.community };
+    if (webIntel && webIntel.sources.length > 0) {
+      const existingComments = [...baseResult.community.comments];
+      for (const src of webIntel.sources) {
+        if (src.title && !existingComments.some((c) => c.text.includes(src.title))) {
+          existingComments.push({
+            date: new Date().toISOString().slice(0, 10),
+            user: "Threat Intel Feed",
+            text: `Related IDS threat report: ${src.title}`,
+            verdict: baseResult.score >= 40 ? "malicious" : "harmless",
+          });
+        }
+      }
+      enrichedCommunity.comments = existingComments.slice(0, 8);
+    }
+
+    return NextResponse.json({
+      ...baseResult,
+      aiEnhanced,
+      aiAnalysis: enrichedAnalysis,
+      community: enrichedCommunity,
+      webIntel,
+      mlAnalysis: mlResult,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("IDS scan error:", error);
+    return NextResponse.json({ error: "Analysis failed" }, { status: 500 });
+  }
+}
