@@ -10,6 +10,7 @@ import {
   AlertOctagon, MonitorDot, Gauge, File, FileText, Link2,
   Network, Users, MessageSquare, Tag, Clock, Copy,
   ChevronDown, ChevronUp, ArrowRight,
+  Share2, Crosshair, BarChart3, GitBranch,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import MitreMatrix from "@/components/advanced/MitreMatrix";
+import ThreatGraph from "@/components/advanced/ThreatGraph";
+import AnalyticsDashboard from "@/components/advanced/AnalyticsDashboard";
 
 // ============ TYPES ============
 interface ThreatAlert {
@@ -33,7 +37,7 @@ interface ThreatAlert {
 
 interface ScanResult {
   id: string;
-  type: "malware" | "phishing";
+  type: "malware" | "phishing" | "ids";
   subType?: "url" | "email";
   target: string;
   threatLevel: "critical" | "high" | "medium" | "low" | "safe";
@@ -269,6 +273,9 @@ function Header({ stats, activeTab, onTabChange }: {
               { value: "malware", icon: Bug, label: "MALWARE SCANNER" },
               { value: "phishing", icon: ShieldAlert, label: "PHISHING DETECT" },
               { value: "ids", icon: Radar, label: "IDS MONITOR" },
+              { value: "attack", icon: Crosshair, label: "ATT&CK MATRIX" },
+              { value: "graph", icon: Share2, label: "THREAT GRAPH" },
+              { value: "analytics", icon: BarChart3, label: "ANALYTICS" },
               { value: "intelligence", icon: Database, label: "INTELLIGENCE" },
             ].map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value}
@@ -1204,7 +1211,7 @@ function VirusTotalResultPanel({ result }: { result: ScanResult }) {
                               {row.map((val, ci) => {
                                 const pct = val / rowTotal;
                                 const isCorrect = ri === ci;
-                                const maxVal = Math.max(...ml.confusionMatrix[ri]);
+                                const maxVal = Math.max(...row);
                                 const isMax = val === maxVal && val > 0;
                                 return (
                                   <div key={ci} className="flex-1 mx-px">
@@ -1757,8 +1764,8 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor, onScan, isS
                     <div className="text-sm font-mono text-slate-300 mb-1 break-all max-w-[300px]">{activeResult.target}</div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <ThreatBadge level={activeResult.threatLevel} />
-                      <Badge variant="outline" className="text-[9px] border-cyber-purple/50 text-cyber-purple">{activeResult.fileMetadata?.attackType || "Unknown"}</Badge>
-                      <Badge variant="outline" className="text-[9px] border-slate-600/50 text-slate-500">{activeResult.fileMetadata?.severity || "INFO"}</Badge>
+                      <Badge variant="outline" className="text-[9px] border-cyber-purple/50 text-cyber-purple">{String(activeResult.fileMetadata?.attackType || "Unknown")}</Badge>
+                      <Badge variant="outline" className="text-[9px] border-slate-600/50 text-slate-500">{String(activeResult.fileMetadata?.severity || "INFO")}</Badge>
                     </div>
                     <div className="text-[11px] text-slate-500 mt-1">Analyzed by {activeResult.engines.length} IDS engines + 10 ML/DL models</div>
                   </div>
@@ -1927,7 +1934,7 @@ function IDSMonitor({ alerts, scans, monitorActive, onToggleMonitor, onScan, isS
                         <span>Score: {scan.score}/100</span>
                         <span>•</span>
                         <span>{scan.engines.filter(e => e.result === "malicious").length} malicious</span>
-                        {scan.fileMetadata?.attackType && <><span>•</span><span>{scan.fileMetadata.attackType as string}</span></>}
+                        {!!scan.fileMetadata?.attackType && <><span>•</span><span>{scan.fileMetadata.attackType as string}</span></>}
                       </div>
                     </button>
                   ))}
@@ -2247,6 +2254,21 @@ export default function CyberDefender() {
           {activeTab === "ids" && (
             <motion.div key="ids" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <IDSMonitor alerts={alerts} scans={scanResults} monitorActive={monitorActive} onToggleMonitor={() => setMonitorActive(!monitorActive)} onScan={handleIDSScan} isScanning={isScanning} />
+            </motion.div>
+          )}
+          {activeTab === "attack" && (
+            <motion.div key="attack" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <MitreMatrix scans={scanResults} />
+            </motion.div>
+          )}
+          {activeTab === "graph" && (
+            <motion.div key="graph" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <ThreatGraph scans={scanResults} />
+            </motion.div>
+          )}
+          {activeTab === "analytics" && (
+            <motion.div key="analytics" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <AnalyticsDashboard scans={scanResults} />
             </motion.div>
           )}
           {activeTab === "intelligence" && (

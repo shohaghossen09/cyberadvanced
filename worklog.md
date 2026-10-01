@@ -215,3 +215,24 @@ Stage Summary:
 - Build error fixed: missing backtick on line 2054 of page.tsx
 - Full ML/DL system verified operational: 10 models × 4 feature extractors × 3 detection domains
 - Browser-verified: page loads, scans work, ML/DL Analysis tab shows all 10 model predictions
+
+---
+Task ID: 10
+Agent: Advanced Upgrade
+Task: Elevate CyberDefender to SOC-grade — add MITRE ATT&CK mapping, threat-correlation graph, security analytics, and STIX export
+
+Work Log:
+- Analyzed full codebase (page.tsx 2263 lines, analysis-engine 2184, ml-engine 2290, threat-analysis 1385) and existing modules (Malware, Phishing, IDS, Intelligence, Command Center)
+- Created `src/lib/mitre-engine.ts` (~470 lines, 0 deps, deterministic): MITRE ATT&CK® Enterprise knowledge base (14 tactics, 40 real technique IDs incl. sub-techniques), keyword-driven `mapToMitre()` matcher producing matched techniques w/ confidence + rationale, tactic rollup, Lockheed-Martin Cyber Kill Chain mapping, coverage %, kill-chain depth, attack-complexity classification, and a human-readable threat narrative. Defensive-only: outputs classifications, detections, and mitigations.
+- Created `src/lib/threat-intel.ts` (~520 lines, 0 deps, deterministic): Shannon entropy (real math) + normalized obfuscation score; multi-type IOC extraction (IPv4/IPv6/domain/URL/MD5/SHA1/SHA256/email/CVE/BTC/registry) with claim-dedup; `buildThreatGraph()` correlation graph (targets↔families↔IOCs, auto-links scans sharing indicators); deterministic Fruchterman–Reingold `forceLayout()` (repulsion + edge attraction + center gravity, temperature cooling) → stable SVG coords; `computeAnalytics()` (distribution, type breakdown, score histogram, timeline, top families, top IOCs, engine efficacy); `generateReport()` incident report + `toStixBundle()` STIX-2.1-style export.
+- Created `src/components/advanced/MitreMatrix.tsx`: interactive ATT&CK Navigator (tactic columns, technique cells heat-colored by confidence), Cyber Kill Chain progress strip, KPI stats, click-through technique detail drawer (description / why-it-matched / detection / mitigation). Aggregates mappings across all detected scans.
+- Created `src/components/advanced/ThreatGraph.tsx`: SVG force-directed correlation graph with hover-to-isolate neighbors, zoom, re-layout, animated critical-node pulse, node-type legend, live tooltip. Surfaces shared-IOC pivot points.
+- Created `src/components/advanced/AnalyticsDashboard.tsx`: recharts dashboard — severity donut, threat-score timeline (area), score histogram, detections-by-module (stacked bar), ATT&CK tactic-exposure radar, top families/IOCs bars, 6 KPI cards, and one-click "EXPORT INTEL (STIX)" download bundling analytics + per-threat incident reports + MITRE mappings + STIX bundles.
+- Integrated into `src/app/page.tsx`: three new tabs (ATT&CK MATRIX, THREAT GRAPH, ANALYTICS) with icons + AnimatePresence render branches; all derive from live scan history (no API rebuild needed).
+- Fixed pre-existing latent bugs surfaced during hardening: widened `ScanResult.type` union to include `"ids"`; guarded `confusionMatrix` row access; coerced `unknown` fileMetadata values before render (4 TS errors resolved).
+
+Stage Summary:
+- 2 new deterministic, dependency-free engine libs (~990 lines) + 3 new UI modules (~750 lines)
+- New capabilities: ATT&CK technique/tactic mapping, kill-chain analysis, IOC extraction + entropy, force-directed threat graph, cross-scan analytics, STIX-2.1 intel export
+- Verification: `tsc --noEmit` clean across app; `next build` compiles successfully (7/7 routes) — remaining infra-only issues are offline Google-Fonts fetch and Prisma engine download, unrelated to code
+- Zero breaking changes to existing modules; all new data derived client-side from scan history
